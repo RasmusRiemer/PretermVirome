@@ -1,0 +1,4030 @@
+---
+title: "Italian preterms 16S and virome analysis"
+output: 
+  html_document:
+    number_sections: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=F}
+subdir_name <- "Italian preterms 16S and virome analysis"
+
+#Set working directory to script directory
+#setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+#Load and prepare OTU-tables + color scale etc.
+source("Analysis0_file_loading_and_prep.R")
+
+dir.create("results", showWarnings = FALSE, recursive = TRUE)
+
+theme_set(theme_classic(base_family = "sans")) #sans = TT Arial, mono = TT courier new, serif = TT Times new roman  
+
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.fullwidth = TRUE)
+
+```
+
+# Sequencing depth
+Both bacterial and viral samples have some very low-read samples - especially at 1 Days
+
+```{r, eval = T, include = T, echo = F, message = F}
+##Check read depth
+
+#Bacteria
+
+sdt = data.table(as(sample_data(PSB), "data.frame"),
+                 TotalReads = sample_sums(PSB), keep.rownames = TRUE)
+setnames(sdt, "rn", "SampleID")
+pSeqDepth = ggplot(sdt, aes(TotalReads)) + geom_histogram() + ggtitle("Bacterial sequencing Depth")
+
+#pSeqDepth
+
+pSeqDepth + 
+  facet_wrap(~Days)
+
+#Virome
+
+sdt = data.table(as(sample_data(PSV), "data.frame"),
+                 TotalReads = sample_sums(PSV), keep.rownames = TRUE)
+setnames(sdt, "rn", "SampleID")
+pSeqDepth = ggplot(sdt, aes(TotalReads)) + geom_histogram() + ggtitle("Viral sequencing Depth")
+
+#pSeqDepth
+
+pSeqDepth + 
+  facet_wrap(~Days)
+```
+
+# Rarefaction curves
+
+All samples have sufficient read depth, except for 37297 and 27281  - these sample should possibly be removed
+
+```{r, eval = T, include = T, echo = F, message = F}
+PSBamp <- ampvis2::amp_load(PSB)
+
+rar.bac <- amp_rarecurve(
+  PSBamp,
+  stepsize = 1000,
+  color_by = "Days",
+  facet_by  = "Days") +
+  scale_color_viridis(discrete=TRUE) +
+  geom_dl(aes(label = description), method = list(dl.trans(x = x + 0.0), "last.points", cex = 0.8)) +
+  #theme(legend.position = "none") +
+  ggtitle("Bacterial rarefaction curve")
+
+PSVamp <- ampvis2::amp_load(PSV.no.realm)
+
+rar.vir <- amp_rarecurve(
+  PSVamp,
+  stepsize = 1000,
+  color_by = "Days",
+  facet_by = "Days"
+) + scale_color_viridis(discrete=TRUE) +
+  geom_dl(aes(label = description), method = list(dl.trans(x = x + 0.0), "last.points", cex = 0.8)) +
+  #theme(legend.position = "none") +
+  ggtitle("Viral rarefaction curve")
+  
+plot_grid(rar.bac,rar.vir)
+```
+
+Do we have any positive or negative controls?
+
+# Viral taxonomy stats
+
+```{r, eval = T, include = T}
+total_reads <- sum(sample_sums(PSV))
+
+#Realm-level
+# no_realm <- subset_taxa(PSV,Realm=="Unclassified")
+# 1-sum(sample_sums(no_realm))/total_reads
+
+#Class
+# no_class <- subset_taxa(PSV,Class=="Unclassified")
+# 1-sum(sample_sums(no_class))/total_reads
+
+#Order
+no_order <- subset_taxa(PSV,Order=="Unclassified")
+1-sum(sample_sums(no_order))/total_reads
+
+#Family
+no_family <- subset_taxa(PSV,Family=="Unclassified")
+1-sum(sample_sums(no_family))/total_reads
+
+#Genus
+no_genus <- subset_taxa(PSV,Genus=="Unclassified")
+1-sum(sample_sums(no_genus))/total_reads
+
+#Species
+no_species <- subset_taxa(PSV,Species=="Unclassified")
+1-sum(sample_sums(no_species))/total_reads
+
+#Caudoviricetes
+caudovirales <- subset_taxa(PSV,Class=="Caudoviricetes")
+sum(sample_sums(caudovirales))/total_reads
+
+caudovirales_uncl <- subset_taxa(caudovirales,Genus=="Unclassified")
+sum(sample_sums(caudovirales_uncl))/sum(sample_sums(caudovirales))
+
+sum(sample_sums(caudovirales_uncl))/total_reads
+#Classified caudovirales
+(sum(sample_sums(caudovirales))-sum(sample_sums(caudovirales_uncl)))/total_reads
+```
+
+# Barplots
+
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+sl(PSB.genus,tax_glom(PSB, "Genus", NArm = FALSE))
+
+ps0 <- transform_sample_counts(PSB.genus, function(x) x / sum(x))
+
+ps1 <- merge_samples(ps0, "Days")
+
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+
+df <- psmelt(ps2)
+
+#Replace missing values with NA
+df[df==""] <- NA
+
+#Select last non-empty taxonomic rank
+df$tax <- apply(df, 1, function(x) tail(stats::na.omit(x), 1))
+
+#Add "unknown" to taxonomy columns where genus is not classified 
+df$tax[is.na(df$Genus)] <- paste0(df$tax[is.na(df$Genus)]," unknown")
+
+#Arrange samples by mean abundance
+
+top <- df %>%
+  group_by(Sample, tax) %>%
+  dplyr::summarize(Mean = mean(Abundance)) %>%
+  dplyr::arrange(-Mean)
+#Show top
+#top
+
+top10 <- top$tax[1:20]
+#Select disered taxonomic level
+df0 <- df %>%
+  mutate(tax = fct_other(tax, c(as.matrix(top10))))
+
+#Bar chart
+
+bar_bac <- ggplot(df0, aes(Sample, Abundance, fill = fct_reorder(tax, Abundance, .fun = mean))) + 
+  geom_col() +
+  scale_fill_manual(values=rep(col_fil,5),name="Genus")+
+  theme_classic() +
+  theme(text = element_text(size = 14), legend.text = element_text(face = "italic"))+
+  ggtitle("Bacteria") +
+  xlab("Days after birth") +
+  ylab("Relative abundance")
+
+##############Bacteria Family level
+
+bac.phyl <- tax_glom(PSB, "Family", NArm = FALSE)
+
+ps0 <- transform_sample_counts(bac.phyl, function(x) x / sum(x))
+
+ps1 <- merge_samples(ps0, "Days")
+
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+
+df <- psmelt(ps2)
+
+#Replace missing values with NA
+df[df==""] <- NA
+
+#Select last non-empty taxonomic rank
+df$tax <- apply(df, 1, function(x) tail(stats::na.omit(x), 1))
+
+#Add "unknown" to taxonomy columns where genus is not classified 
+df$tax[is.na(df$Genus)] <- paste0(df$tax[is.na(df$Genus)]," unknown")
+
+#Arrange samples by mean abundance
+
+top <- df %>%
+  group_by(Sample, tax) %>%
+  dplyr::summarize(Mean = mean(Abundance)) %>%
+  dplyr::arrange(-Mean)
+#Show top
+#top
+
+top10 <- top$tax[1:20]
+#Select disered taxonomic level
+df0 <- df %>%
+  mutate(tax = fct_other(tax, c(as.matrix(top10))))
+
+#Bar chart
+
+bar_bac_fam <- ggplot(df0, aes(Sample, Abundance, fill = fct_reorder(tax, Abundance, .fun = mean))) + 
+  geom_col() +
+  scale_fill_manual(values=rep(col_fil,5),name="Family")+
+  theme_classic() +
+  theme(text = element_text(size = 14), legend.text = element_text(face = "italic"))+
+  ggtitle("Bacteria") +
+  xlab("Days after birth") +
+  ylab("Relative abundance")
+
+#bar_bac
+
+#Virome
+
+bac.phyl <- tax_glom(PSV, taxrank="Order", NArm = FALSE)
+
+ps0 <- transform_sample_counts(bac.phyl, function(x) x / sum(x))
+
+ps1 <- merge_samples(ps0, "Days")
+
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+
+
+#Select desired rank
+
+df <- psmelt(ps2)
+
+#Select last non-empty taxonomic rank
+
+df[df==""] <- NA
+
+df$tax <- apply(df, 1, function(x) tail(na.omit(x), 1))
+
+top <- df %>%
+  group_by(Sample, tax) %>%
+  dplyr::summarize(Mean = mean(Abundance)) %>%
+  dplyr::arrange(-Mean)
+#Show top
+#top
+
+top10 <- top$tax[1:20]
+df0 <- df %>%
+  mutate(tax = fct_other(tax, c(as.matrix(top10))))
+
+#Change "Unknown" to "Unknown virus" and "No_match" to "No match"
+
+df0$tax <- plyr::revalue(df0$tax, c("Unknown"="Unknown virus"))
+df0$tax <- plyr::revalue(df0$tax, c("no_match"="No match"))
+
+#Add "unknown" to taxonomy columns where genus is not classified 
+#$tax[is.na(df$Genus)] <- paste0(df$tax[is.na(df$Genus)]," unknown")
+
+#Bar chart
+
+bar_vir_family <- ggplot(df0, aes(Sample, Abundance, fill = fct_reorder(tax, Abundance, .fun = mean))) + 
+  geom_col() +
+  scale_fill_manual(values=rep(col_fil,5),name="Order")+
+  theme_classic() +
+  theme(text = element_text(size = 14), legend.text = element_text(face = "italic"))+
+  ggtitle("Virome") +
+  xlab("Days after birth") +
+  ylab("Relative abundance")
+
+#bar_vir_family
+
+plot_grid(bar_bac_fam,bar_vir_family)
+```
+
+## Host predictions
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+sl(PSV.genus,tax_glom(PSV.host, "Genus", NArm = FALSE))
+
+ps0 <- transform_sample_counts(PSV.genus, function(x) x / sum(x))
+
+ps1 <- merge_samples(ps0, "Days")
+
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+
+df <- psmelt(ps2)
+
+#Replace missing values with NA
+df[df==""] <- NA
+
+#Select last non-empty taxonomic rank
+df$tax <- apply(df, 1, function(x) tail(stats::na.omit(x), 1))
+
+#Add "unknown" to taxonomy columns where genus is not classified 
+df$tax[is.na(df$Genus)] <- paste0(df$tax[is.na(df$Genus)]," unknown")
+
+#Arrange samples by mean abundance
+
+top <- df %>%
+  group_by(Sample, tax) %>%
+  dplyr::summarize(Mean = mean(Abundance)) %>%
+  dplyr::arrange(-Mean)
+#Show top
+#top
+
+top10 <- top$tax[1:18]
+#Select disered taxonomic level
+df0 <- df %>%
+  mutate(tax = fct_other(tax, c(as.matrix(top10))))
+
+#Bar chart
+
+bar_host <- ggplot(df0, aes(Sample, Abundance, fill = fct_reorder(tax, Abundance, .fun = mean))) + 
+  geom_col() +
+  scale_fill_manual(values=rep(col_fil,5),name="Genus")+
+  theme_classic() +
+  theme(text = element_text(size = 14), legend.text = element_text(face = "italic"))+
+  ggtitle("Viral hosts") +
+  xlab("Days after birth") +
+  ylab("Relative abundance")
+
+#bar_host
+
+plot_grid(bar_bac,bar_host)
+
+```
+
+# Abundance heatmaps
+
+## Bacteria
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+#Load phyloseq files to ampvis2 format
+PSBamp <- ampvis2::amp_load(PSB)
+
+##Plot heamap
+
+##Bacteria
+amp_bac_genus <- amp_heatmap(PSBamp,
+            group_by = "Twin_pairs_bis",
+            facet_by = "Days",
+            plot_values = FALSE,
+            tax_show = 30,
+            tax_aggregate = "Genus" ,
+            tax_add = NULL,
+            tax_empty = "best",
+            normalise = TRUE,
+            color_vector = c("white", "red"),
+            plot_colorscale = "sqrt",
+            plot_legendbreaks = c(1, 10, 25, 50)
+) +
+  theme_classic() +
+  theme(strip.background = element_rect(colour = "white", fill = "white"),
+        strip.text.x = element_text(face = "bold"),
+        axis.text.x=element_text(angle = -45, hjust = 0,vjust = 0.2))
+
+amp_bac_genus
+
+```
+
+## Virome
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+#Load phyloseq files to ampvis2 format
+
+PSVamp <- ampvis2::amp_load(PSV.no.realm)  
+
+##Virome
+
+amp_vir_genus <- amp_heatmap(PSVamp,
+            group_by = "Twin_pairs_unique",
+            facet_by = "Days",
+            plot_values = FALSE,
+            tax_show = 40,
+            tax_aggregate = "Order",
+            tax_add = "Class",
+            tax_empty = "best",
+            normalise = TRUE,
+            color_vector = c("white", "red"),
+            plot_colorscale = "sqrt",
+            plot_legendbreaks = c(1, 10, 25, 50)
+) +
+  theme_classic() +
+  theme(strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text.x = element_text(face = "bold"),
+        axis.text.x=element_text(angle = -45, hjust = 0,vjust = 0.2))
+
+
+amp_vir_genus
+
+PSVamp$tax[PSVamp$tax == "Unclassified"] <- ""
+
+##Virome
+
+amp_vir_species <- amp_heatmap(PSVamp,
+            group_by = "Twin_pairs_unique",
+            facet_by = "Days",
+            plot_values = FALSE,
+            tax_show = 40,
+            tax_aggregate = "Genus" ,
+            tax_add = NULL,
+            tax_empty = "best",
+            normalise = TRUE,
+            color_vector = c("white", "red"),
+            plot_colorscale = "sqrt",
+            plot_legendbreaks = c(1, 10, 25, 50)
+) +
+  theme_classic() +
+  theme(strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text.x = element_text(face = "bold"),
+        axis.text.x=element_text(angle = -45, hjust = 0,vjust = 0.2))
+
+amp_vir_species
+```
+
+
+
+## Host virome
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+#Load phyloseq files to ampvis2 format
+
+PSV.host.amp <- ampvis2::amp_load(PSV.host)
+
+amp_heatmap(PSV.host.amp,
+            group_by = "Twin_pairs_unique",
+            facet_by = "Days",
+            plot_values = FALSE,
+            tax_show = 40,
+            tax_aggregate = "Genus" ,
+            tax_add = "Family",
+            tax_empty = "best",
+            normalise = TRUE,
+            color_vector = c("white", "red"),
+            plot_colorscale = "sqrt",
+            plot_legendbreaks = c(1, 10, 25, 50)
+) +
+  theme_classic() +
+  theme(strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text.x = element_text(face = "bold"),
+        axis.text.x=element_text(angle = -45, hjust = 0,vjust = 0.2))
+
+amp_heatmap(PSV.host.amp,
+            group_by = "Days",
+            facet_by = "Twin_pairs_unique",
+            plot_values = FALSE,
+            tax_show = 30,
+            tax_aggregate = "Genus" ,
+            tax_add = "Family",
+            tax_empty = "best",
+            normalise = TRUE,
+            color_vector = c("white", "red"),
+            plot_colorscale = "sqrt",
+            plot_legendbreaks = c(1, 10, 25, 50)
+) +
+  theme_classic() +
+  theme(strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text.x = element_text(face = "bold"),
+        axis.text.x=element_text(angle = -45, hjust = 0,vjust = 0.2))
+
+amp_host_pair <- amp_heatmap(PSV.host.amp,
+            group_by = "Twin_pairs_unique",
+            facet_by = "Days",
+            plot_values = FALSE,
+            tax_show = 30,
+            tax_aggregate = "Genus" ,
+            tax_add = "Family",
+            tax_empty = "best",
+            normalise = TRUE,
+            color_vector = c("white", "red"),
+            plot_colorscale = "sqrt",
+            plot_legendbreaks = c(1, 10, 25, 50)
+) +
+  theme_classic() +
+  theme(strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text.x = element_text(face = "bold"),
+        axis.text.x=element_text(angle = -45, hjust = 0,vjust = 0.2))
+
+amp_host_pair
+```
+
+
+
+# Upset plot
+
+## Bacteria
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+library(MicrobiotaProcess)
+library(VennDiagram)
+library(UpSetR)
+
+ps <- PSB
+# ps <- subset_samples(ps, !is.na(Days))
+# ps@sam_data$Days <- as.factor(ps@sam_data$Days)
+
+vennlist <- get_vennlist(obj=ps, factorNames="Days")
+upsetda <- get_upset(obj=ps, factorNames="Days")
+
+vennp <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      #fill=col_fil,
+                      #cat.col=col_fil,
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+grid::grid.draw(vennp)
+
+upset.bac.time <- upset(upsetda, 
+      sets.bar.color = "#56B4E9",
+      order.by = "freq", 
+      empty.intersections = "on")
+
+upset.bac.time
+
+#library(ggplotify)
+```
+
+## Virome
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+library("MicrobiotaProcess")
+
+ps <- PSV
+# ps <- subset_samples(ps, !is.na(Days))
+# ps@sam_data$Days <- as.factor(ps@sam_data$Days)
+
+vennlist <- get_vennlist(obj=ps, factorNames="Days")
+upsetda <- get_upset(obj=ps, factorNames="Days")
+
+vennp <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      #fill=col_fil,
+                      #cat.col=col_fil,
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+grid::grid.draw(vennp)
+
+upset.vir.time <- upset(upsetda, 
+      sets.bar.color = "#56B4E9",
+      order.by = "freq", 
+      empty.intersections = "on") 
+
+upset.vir.time
+
+#library(ggplotify)
+```
+
+## Virome host
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+library("MicrobiotaProcess")
+
+ps <- PSV.host
+ps <- subset_samples(ps, !is.na(Days))
+ps@sam_data$Days <- as.factor(ps@sam_data$Days)
+
+vennlist <- get_vennlist(obj=ps, factorNames="Days")
+upsetda <- get_upset(obj=ps, factorNames="Days")
+
+vennp <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      #fill=col_fil,
+                      #cat.col=col_fil,
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+grid::grid.draw(vennp)
+
+upset.vir.host.time <- upset(upsetda, 
+      sets.bar.color = "#56B4E9",
+      order.by = "freq", 
+      empty.intersections = "on") 
+
+upset.vir.host.time
+```
+
+```{r, eval = T, include = F, echo = F, message = F, warning =  F}
+#Unload Microbiota Process package to avoid conflict with tax_table form phyloseq
+detach(package:MicrobiotaProcess)
+```
+
+# Alpha diversity
+
+
+```{r, eval = T, include = F, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+#Normalize to mean read count
+total = median(sample_sums(PSB))
+standf = function(x, t=total) round(t * (x / sum(x)))
+PSB.R = transform_sample_counts(PSB, standf)
+
+#Set desired alpha diversity metrics
+
+alpha_met <- c("Observed", "Shannon", "Chao1", "InvSimpson")
+
+###########Boxplots
+
+##Time
+
+variable <- c("Days")
+
+alpha.metrics.bac <- plot_richness(PSB.R, measures=alpha_met , x=variable, color=variable) + 
+  geom_boxplot(alpha=0.1, lwd = 1) +
+  scale_color_jco() +
+  theme_classic() +
+  theme(text = element_text(size = 8),
+        axis.line=element_line(size=1),
+        axis.text=element_text(size = 8, colour = "Black"),
+        axis.ticks=element_line(size=1, colour = "Black"),
+        strip.background = element_rect(colour = "white", fill = "white"),
+        axis.text.x=element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(size = 8, angle = 0),
+        legend.text = element_text(size = 8)
+  ) +
+  labs(x="Days",
+       y="Alpha diversity") + 
+  ggtitle("Bacteria") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+
+alpha.metrics.bac
+```
+
+```{r, eval = F, include = F, echo = F, warning = F}
+##Richness - all time points
+
+richness = estimate_richness(PSB.R, measures = alpha_met)
+
+#Time
+
+rich <- cbind(richness, variable = sample_data(PSB.R)$Days)
+
+TukeyHSD(aov(Shannon ~ variable, rich))
+```
+
+```{r, eval = T, include = F, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+#Normalize to mean read count
+total = median(sample_sums(PSV))
+standf = function(x, t=total) round(t * (x / sum(x)))
+PSB.R = transform_sample_counts(PSV, standf)
+
+#Set desired alpha diversity metrics
+
+alpha_met <- c("Observed", "Shannon", "Chao1", "InvSimpson")
+
+###########Boxplots
+
+##Time
+
+variable <- c("Days")
+
+alpha.metrics.vir <- plot_richness(PSB.R, measures=alpha_met , x=variable, color=variable) + 
+  geom_boxplot(alpha=0.1, lwd = 1) +
+  scale_color_jco() +
+  theme_classic() +
+  theme(text = element_text(size = 8),
+        axis.line=element_line(size=1),
+        axis.text=element_text(size = 8, colour = "Black"),
+        axis.ticks=element_line(size=1, colour = "Black"),
+        strip.background = element_rect(colour = "white", fill = "white"),
+        axis.text.x=element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(size = 8, angle = 0),
+        legend.text = element_text(size = 8)
+  ) +
+  labs(x="Days",
+       y="Alpha diversity")  + 
+  ggtitle("Virome") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+
+alpha.metrics.vir
+```
+
+```{r, eval = F, include = F, echo = F, warning = F}
+##Richness - all time points
+
+richness = estimate_richness(PSB.R, measures = alpha_met)
+
+#Time
+
+rich <- cbind(richness, variable = sample_data(PSB.R)$Days)
+
+TukeyHSD(aov(Shannon ~ variable, rich))
+
+```
+
+## Bacterial and viral shannon diversity
+
+```{r, eval = T, include = T, echo = F, warning=F}
+#####################################Alpha diversity#######################################
+
+##Normalize both bacterial and viral data to mean read count
+
+
+standf = function(x, t=total) round(t * (x / sum(x)))
+#bacteria
+total = median(sample_sums(PSB))
+PSBR = transform_sample_counts(PSB, standf)
+#virome
+total = median(sample_sums(PSV))
+PSVR = transform_sample_counts(PSV, standf)
+
+#Set desired alpha diversity metrics
+
+#alha_met <- c("Observed", "Shannon","Chao1","ACE")
+
+alha_met <- c("Shannon") 
+
+
+###########Boxplots
+
+#Set days as factor
+# sample_data(PSBR)$Days = as.factor(sample_data(PSBR)$Days)
+# sample_data(PSVR)$Days = as.factor(sample_data(PSVR)$Days)
+
+#Set sign argumetns
+symnum.args <- list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns"))
+
+
+#Bacteria
+
+#my_comparisons = list( c("0", "15"), c("30", "90"), c("0","30"), c("0","90"), c("15","90") ) #All comparisons
+my_comparisons = list( c("30", "90"), c("1","30"), c("1","90"), c("15","90") ) ##Choose comparisons - hide non sign comparisons
+
+
+bac.alpha <- plot_richness(PSBR, measures=alha_met , x="Days", color="Days") + 
+  geom_boxplot(alpha=0.1) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox", paired = FALSE, symnum.args = symnum.args) +
+  theme_classic() +
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+        strip.background = element_blank(),
+        strip.text.x = element_blank()
+        ) +
+  geom_point(size = 2) +
+  scale_color_manual(values=col_fil) +
+  labs(y = "Shannon diversity") +
+  ggtitle("Bacteria")
+
+#bac.alpha
+
+#Virome
+
+#my_comparisons = list( c("1", "15"), c("30", "90"), c("1","30"), c("1","90"), c("15","90") )
+my_comparisons = list( c("1", "15") ) #Sign comparisons 
+
+vir.alpha <- plot_richness(PSVR, measures=alha_met , x="Days", color="Days") + 
+  geom_boxplot(alpha=0.1) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox", paired = FALSE, symnum.args = symnum.args) +
+  theme_classic() +
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+        strip.background = element_blank(),
+        strip.text.x = element_blank()
+  ) +
+  geom_point(size = 2) +
+  scale_color_manual(values=col_fil) +
+  labs(y = "") +
+  ggtitle("Virome")
+
+vir.alpha
+
+alpha_div <- plot_grid(bac.alpha,vir.alpha)
+
+```
+
+```{r, eval = T, include = F, echo = F, warning=F}
+
+#############################Supplementary - multiple measures
+
+#Set desired alpha diversity metrics
+
+alha_met <- c("Observed","Shannon","InvSimpson")
+
+
+###########Boxplots
+
+#Set days as factor
+sample_data(PSBR)$Days = as.factor(sample_data(PSBR)$Days)
+sample_data(PSVR)$Days = as.factor(sample_data(PSVR)$Days)
+
+#Set sign argumetns
+symnum.args <- list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns"))
+
+
+#Bacteria
+
+my_comparisons = list( c("1", "15"), c("30", "90"), c("1","30"), c("1","90"), c("15","90") ) #All comparisons
+#my_comparisons = list(c("30", "90"),c("15","90") ) ##Choose comparisons - hide non sign comparisons
+
+
+bac.alpha.all <- plot_richness(PSBR, measures=alha_met , x="Days", color="Days") + 
+  geom_boxplot(alpha=0.1) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox", paired = FALSE, symnum.args = symnum.args) +
+  theme_classic() +
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+        strip.background = element_blank()
+  ) +
+  geom_point(size = 2) +
+  scale_color_manual(values=col_fil) +
+  labs(y = "Alpha diversity") +
+  ggtitle("Bacteria")
+
+#bac.alpha.all
+
+#Virome
+
+vir.alpha.all <- plot_richness(PSVR, measures=alha_met , x="Days", color="Days") + 
+  geom_boxplot(alpha=0.1) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox", paired = FALSE, symnum.args = symnum.args) +
+  theme_classic() +
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+        strip.background = element_blank()
+  ) +
+  geom_point(size = 2) +
+  scale_color_manual(values=col_fil) +
+  labs(y = "") +
+  ggtitle("Virome")
+
+#vir.alpha.all
+
+vir.alpha.all <- plot_grid(bac.alpha.all,vir.alpha.all,legend=F, ncol = 1)
+```
+
+## Bac vs viral alfa diversity
+
+```{r, eval = T, include = T}
+#Subset samples present in both
+vir_ids <- PSV@sam_data$description %>% str_split_i("_",-1)
+PSV@sam_data$id <- vir_ids
+PSBR@sam_data$description <-PSBR@sam_data$description %>% str_split_i("_",-1)
+PSVR@sam_data$description <-PSVR@sam_data$description %>% str_split_i("_",-1)
+
+PSB.R.both <- subset_samples(PSBR,description %in% vir_ids)
+#PSV.CSS.both <- subset_samples(PSV.CSS,vir_ids %in% PSB.CSS.both@sam_data$description)
+PSV.R.both <- subset_samples(PSVR,vir_ids %in% PSB.R.both@sam_data$description)
+
+shannon_bac = estimate_richness(PSB.R.both, measures = "Shannon")
+shannon_bac <- cbind(shannon_bac, Days = sample_data(PSB.R.both)$Days) %>% dplyr::rename(Bac_Shannon = Shannon)
+
+shannon_vir = estimate_richness(PSV.R.both, measures = "Shannon")
+shannon_vir <- cbind(shannon_vir, Days = sample_data(PSV.R.both)$Days) %>% dplyr::rename(Vir_Shannon = Shannon)
+
+shannon_bac_vir <- cbind(shannon_bac,Vir_Shannon=shannon_vir$Vir_Shannon)
+
+ggplot(shannon_bac_vir,aes(x=Bac_Shannon,y=Vir_Shannon
+                           ,color=Days
+                           ))+
+  geom_point() 
+  # gpmisc::stat_poly_line() +
+  # ggpmisc::stat_poly_eq(use_label(c("eq", "R2")))"
+```
+
+
+# Beta diversity
+
+## Days
+
+```{r, eval = T, include = T, echo = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+############Pairwise permanova to calculate significance
+
+##Adonis
+
+#Bacteria
+bray.PSB <- phyloseq::distance(PSB.CSS, method = "bray")
+
+#make a data frame from the sample_data
+sampledf.PSB <- data.frame(sample_data(PSB.CSS))
+
+adonis.PSB <- adonis2(bray.PSB ~ Days, data = sampledf.PSB)
+
+
+#Virome
+bray.PSV <- phyloseq::distance(PSV.CSS, method = "bray")
+
+# make a data frame from the sample_data
+sampledf.PSV <- data.frame(sample_data(PSV.CSS))
+
+adonis.PSV <- adonis2(bray.PSV ~ Days, data = sampledf.PSV)
+
+######## Do PCoA ordination based on Bray-curtis distance
+
+GP.ord <- ordinate(PSB.CSS, "PCoA", "bray")
+
+bac.beta = plot_ordination(PSB.CSS, GP.ord, color="Days") + 
+  stat_ellipse(aes(color = Days),geom = "polygon", level = 0.95, fill = NA, size = 1) +
+  scale_fill_manual(values= col_fil) +
+  scale_color_manual(values = col_fil) +
+  theme_classic() + 
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+        strip.background = element_blank(),
+        strip.text.x = element_blank()
+  ) + 
+  geom_point(aes(fill = Days), color= "black" ,pch=21, size = 3.5) +
+  scale_x_reverse() +# Revert x-axis to match plots
+  ggtitle("Bacteria") +
+ggplot2::annotate("text", x = -0.45, y = 0.4, label = "P < 0.001") #Add p-value from adonis
+
+#bac.beta 
+
+GP.ord <- ordinate(PSV.CSS, "PCoA", "bray")
+
+vir.beta = plot_ordination(PSV.CSS, GP.ord, color="Days") + 
+  stat_ellipse(aes(color = Days),geom = "polygon", level = 0.95, fill = NA, size = 1) +
+  scale_fill_manual(values= col_fil) +
+  scale_color_manual(values = col_fil) +
+  theme_classic() + 
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+        strip.background = element_blank(),
+        strip.text.x = element_blank()
+  ) +
+  geom_point(aes(fill = Days), color= "black" ,pch=21, size = 3.5) +
+  #scale_y_reverse() + # Revert y-axis to match plots
+  ggtitle("Virome") +
+  ggplot2::annotate("text", x = -0.6, y = -0.5, label = "P < 0.001") #Add p-value from adonis
+
+#vir.beta
+
+#Arrange plots
+
+plot_grid(bac.beta, vir.beta, nrow = 1)
+
+```
+
+NB! This is including some bacterial day 0 samples >100 reads!
+
+# Within vs between twin pairs bray curtis dissimilarity
+
+```{r, eval = T, include = T, echo = F, message = F}
+
+source("Helper_Functions.R")
+
+#############Generate Bray curtis pairwise distance data frame:
+
+#PSB.CSS.sub <- subset_samples(PSB.CSS, Days == "90") 
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSB.CSS))
+
+unweightedDist <- as.matrix(t(PSB.CSS@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+BrayPlot.bac <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Bacteria") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,label.x.npc = 0.5)
+
+#BrayPlot.bac
+```
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+
+source("Helper_Functions.R")
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSV.CSS))
+
+unweightedDist <- as.matrix(t(PSV.CSS@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+BrayPlot.vir <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Virome") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,label.x.npc = 0.5)
+
+#BrayPlot.vir
+
+plot_grid(BrayPlot.bac,BrayPlot.vir, nrow = 1)
+```
+
+## Individual time points
+
+### Day 1
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+source("Helper_Functions.R")
+
+PSB.CSS.sub <- subset_samples(PSB.CSS, Days == "1") 
+
+PSV.CSS.sub <- subset_samples(PSV.CSS, Days == "1") 
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSB.CSS.sub))
+
+unweightedDist <- as.matrix(t(PSB.CSS.sub@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+BrayPlot.bac.0 <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Day 1") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,aes(label = paste0("p = ", ..p.format..)),label.x.npc="center",label.y=0.6) +
+  guides(fill="none")
+
+#BrayPlot.bac
+
+###############################################Virome
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSV.CSS.sub))
+
+unweightedDist <- as.matrix(t(PSV.CSS.sub@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+my_comparisons <- list(c("Related","Unrelated"))
+
+BrayPlot.vir.0 <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Day 1") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,aes(label = paste0("p = ", ..p.format..)),label.x.npc="center",label.y=0.45) +
+  guides(fill="none")
+
+
+#BrayPlot.vir
+
+plot_grid(BrayPlot.bac.0,BrayPlot.vir.0, nrow = 1)
+```
+
+### Day 15
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+source("Helper_Functions.R")
+
+PSB.CSS.sub <- subset_samples(PSB.CSS, Days == "15") 
+
+PSV.CSS.sub <- subset_samples(PSV.CSS, Days == "15") 
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSB.CSS.sub))
+
+unweightedDist <- as.matrix(t(PSB.CSS.sub@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+BrayPlot.bac.15 <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Day 15") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,aes(label = paste0("p = ", ..p.format..)),label.x.npc="center",label.y=0.58) +
+  guides(fill="none") +
+  theme(axis.title.y = element_blank())
+  
+
+#BrayPlot.bac
+
+###############################################Virome
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSV.CSS.sub))
+
+unweightedDist <- as.matrix(t(PSV.CSS.sub@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+BrayPlot.vir.15 <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Day 15") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,aes(label = paste0("p = ", ..p.format..)),label.x.npc="center",label.y=0.6) +
+  guides(fill="none") +
+  theme(axis.title.y = element_blank())
+
+#BrayPlot.vir
+
+plot_grid(BrayPlot.bac.15,BrayPlot.vir.15, nrow = 1) +
+  guides(fill="none")
+```
+
+### Day 30
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+source("Helper_Functions.R")
+
+PSB.CSS.sub <- subset_samples(PSB.CSS, Days == "30") 
+
+PSV.CSS.sub <- subset_samples(PSV.CSS, Days == "30") 
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSB.CSS.sub))
+
+unweightedDist <- as.matrix(t(PSB.CSS.sub@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+BrayPlot.bac.30 <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Day 30") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,aes(label = paste0("p = ", ..p.format..)),label.x.npc="center",label.y=0.50) +
+  guides(fill="none") +
+  theme(axis.title.y = element_blank())
+
+#BrayPlot.bac
+
+###############################################Virome
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSV.CSS.sub))
+
+unweightedDist <- as.matrix(t(PSV.CSS.sub@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+BrayPlot.vir.30 <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Day 30") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,aes(label = paste0("p = ", ..p.format..)),label.x.npc="center",label.y=0.50) +
+  guides(fill="none") +
+  theme(axis.title.y = element_blank())
+#BrayPlot.vir
+
+plot_grid(BrayPlot.bac.30,BrayPlot.vir.30, nrow = 1)
+```
+
+### Day 90
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+source("Helper_Functions.R")
+
+PSB.CSS.sub <- subset_samples(PSB.CSS, Days == "90") 
+
+PSV.CSS.sub <- subset_samples(PSV.CSS, Days == "90") 
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSB.CSS.sub))
+
+unweightedDist <- as.matrix(t(PSB.CSS.sub@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+BrayPlot.bac.90 <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Day 90") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" ,aes(label = paste0("p = ", ..p.format..)),label.x.npc="center",label.y=0.4) +
+  guides(fill="none") +
+  theme(axis.title.y = element_blank())
+
+#BrayPlot.bac
+
+###############################################Virome
+
+#############Generate Bray curtis pairwise distance data frame:
+
+# Calculate the distance object
+metadataStool <- data.frame(sample_data(PSV.CSS.sub))
+
+unweightedDist <- as.matrix(t(PSV.CSS.sub@otu_table))
+
+unweightedDist <- vegdist(unweightedDist, dist = "bray")
+
+# Coerce distance object into matrix
+unweightedDistMtx <- as.matrix(unweightedDist)
+
+# Melt and remove values of 0 to eliminate distances of each sample to itself
+unweightedDistMtx_melt <- subset(reshape2::melt(unweightedDistMtx, 
+                                                value.name = "UniFrac_Distance"),
+                                 UniFrac_Distance != 0)
+
+# Change Var1 and Var2 from factors to characters for easier use with dplyr
+factorCols <- c("Var1", "Var2")
+unweightedDistMtx_melt[factorCols] <- lapply(unweightedDistMtx_melt[factorCols], 
+                                             as.character)
+
+# Add columns for later subsetting when plotting.  This information will get
+#   pulled from the metadata (metadataStool).  Within the *DistMtx_melt data 
+#   frames, we need a column indicating whether Var1 and Var2 are infants,
+#   mothers, and whether they're related.
+unweightedDistDF <- unweightedDistMtx_melt
+
+# Add Var1 and Var2 Type and Zygosity columns
+# Put rownames back in metadataStool, then use the rownames to locate needed info
+# <- column_to_rownames(metadataStool, var = "Twin_pairs")
+
+unweightedDistDF <- unweightedDistDF %>%
+  mutate(Var1_Type = metadataStool[unweightedDistDF$Var1, "Twin_pairs"],
+         Var2_Type = metadataStool[unweightedDistDF$Var2, "Twin_pairs"])
+
+# To easily determine the relatedness of the paired samples in each row,
+#   create "short names" to replace the long sample names.
+#   First put the rownames back into a column.
+
+metadataStool <- rownames_to_column(metadataStool, var = "Sample")
+
+lut_df <- dplyr::select(metadataStool, Sample, Twin_pairs, Twin_pairs)
+
+# convert lut_df into a vector
+lut <- as.character(lut_df$Twin_pairs)
+names(lut) <- lut_df$Sample
+
+# Add in the short names to the distance data frames
+unweightedDistDF$Var1_ShortName <- lut[unweightedDistDF$Var1]
+unweightedDistDF$Var2_ShortName <- lut[unweightedDistDF$Var2]
+
+# Add a column indicating whether a given row (pairwise comparison) is between
+#   two related or unrelated samples.
+#   Loop over the rows of the distance df, split Var1 and Var2 short names by 
+#   "." delimiter and compare the 2nd element of the resulting list which will hold the 
+#   Tarr Family ID,
+
+AddPairRelation <- function(df) {
+  
+  oldDF <- df
+  
+  pairRelation <- vector(mode = "character", length = nrow(oldDF))
+  
+  for (i in 1:nrow(oldDF)) {
+    Var1_split <- strsplit(x = df[i, "Var1_ShortName"], split = "\\.")
+    Var2_split <- strsplit(x = df[i, "Var2_ShortName"], split = "\\.")
+    
+    if (Var1_split[[1]][[1]] == Var2_split[[1]][[1]]) {
+      pairRelation[i] <- "Between \n twins"
+    } else {
+      pairRelation[i] <- "Between \n unrelated"
+    }
+  }
+  
+  oldDF$Pair_Relation <- pairRelation
+  
+  return(oldDF)
+  
+}
+
+unweightedDistDF <- AddPairRelation(unweightedDistDF)
+
+#Weighted distance boxplots
+
+symnum <- list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns"))
+
+BrayPlot.vir.90 <- 
+  
+  ggplot(unweightedDistDF,aes(Pair_Relation,UniFrac_Distance,fill = Pair_Relation)) +
+  geom_boxplot(aes(fill = Pair_Relation),outlier.shape=NA)+
+  #  geom_jitter(width = 0.2) +
+  ylab("Bray-curtis distance") +
+  xlab("Day 90") +
+  theme_pubclean() +
+  scale_fill_jco() +
+  stat_compare_means(method = "wilcox.test" , aes(label = paste0("p = ", ..p.format..)),label.x.npc="center",label.y=0.45) +
+  guides(fill="none") +
+  theme(axis.title.y = element_blank())
+
+#BrayPlot.vir
+
+plot_grid(BrayPlot.bac.90,BrayPlot.vir.90, nrow = 1)
+```
+
+# Effect size
+
+## Bacteria
+
+```{r, eval = T, include = T, echo = F, message = F}
+
+#################################Importing-Data
+
+#########Bacteria
+
+#standf = function(x, t=total) round(t * (x / sum(x)))
+#total = median(sample_sums(PSB))
+#PSB.R = transform_sample_counts(PSB, standf)
+
+import.otu.table <- as.data.frame(otu_table(PSB)) %>%
+  #dplyr::select(-taxonomy) %>%
+  mutate_all(as.numeric) #Convert to numeric where possible
+
+cure.data = meta.bac
+
+#import.taxonomy = read.table('virome_taxonomy_LCA_known.txt', header = T)
+
+rownames <- rownames(cure.data)
+
+#Remove NA colomns
+
+cure.data <- cure.data[ , ! apply( cure.data , 2 , function(x) all(is.na(x)) ) ]
+
+#Set numeric column class
+cure.data <- cure.data %>% mutate_if(is.character,as.factor)
+#Add back rownames
+
+rownames(cure.data) <- rownames
+
+#cure.data <- cure.data %>% mutate_if(is.character, as.numeric)
+
+X8.nonrarefied = t(import.otu.table)                                                                  ###%%% non-rarefied
+
+
+###rarefying|subsampling reads in every sample
+barplot(colSums(import.otu.table))
+min(colSums(import.otu.table))
+
+rare8 <- t(import.otu.table)
+#rare8 = rarefy(t(import.otu.table), sample = 20000)
+X8.rarefied = as.data.frame(rare8)                                                                 ###%%% rarefied
+
+###Subset metadata to match remaining samples after rarefaction
+
+Y.all = cure.data[rownames(X8.rarefied),]
+
+###Log tranformation
+X = log10(X8.rarefied+1)
+
+#Select relevant numeric column
+
+Y <- dplyr::select(Y.all,c("Twin_pairs", "Days", "Gestational_age", "Birth_weight", "Small_for_gestational_age", "Antenatal_steroids" , "Delivery_mode", "Intrapartum_antibiotic_prophylaxis", "Late_onset_sepsis" , "Necrotizing_enterocolitis", "Patent_ductus_arteriosus", "Bronchopulmonary_dysplasia", "Antibiotics_at_birth", "Total_days_antibiotics_therapy"))
+
+#colnames(Y) #Check remaining columns
+
+###Select only numeric metadata culumns
+
+#Y  <- Y %>% mutate_all(as.numeric)
+
+#colnames(Y) #Check remaining columns
+
+##vifcor
+#collinearity <- vifcor(Y, th  =0.5) #at 0.5 threshold variables have a VIF below 10.00 (<0.21 correlation!)
+#collinearity
+
+#Select relevant columns for that are non-collinear
+
+Y.ad = Y
+#Y.ad <- dplyr::select(Y.all,c("Batch", "Time")
+
+#Y.ad <- Y.all[8:23]
+
+#Remove NA rows
+
+Y.ad <- Y.ad %>% drop_na()
+
+X.ad <- X[rownames(Y.ad),]
+
+#is.na(Y.ad)
+```
+
+### Db anova - constrained by time point
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+##############Anova on capscale - all variables
+
+anova.m <- matrix(nrow = 0, ncol =6) #Create matrix for results
+colnames(anova.m) <- c("Df","SumOfSqs","F","Pr.F","Residual.Df","Residual.SumOfSqs")                
+for (i in colnames(dplyr::select(Y.ad,-c("Days")))){
+  anova <- as.matrix(anova.cca(capscale(X.ad ~ Y.ad[,i] + Condition(Days), Y.ad, dist = "bray"),permutations = how(nperm=9999)))
+  anova <- c(anova[1,],anova[2,1:2])
+  anova.m <-rbind(anova.m,anova)
+}
+
+rownames(anova.m) <- colnames(dplyr::select(Y.ad,-c("Days")))
+
+#Prepare for plotting
+
+anova.dat <- anova.m %>%
+  as.data.frame() %>%
+  tibble::add_column(Variable = rownames(anova.m),.name_repair = "minimal") 
+
+#Add adjusted p-values
+anova.dat$Pr.F.adj <- p.adjust(anova.dat$Pr.F, method = 'holm')
+
+#Show table
+#knitr::kable(anova.dat)
+
+#Calculate R^2 from sum of squares
+anova.dat$R2 <- anova.dat$SumOfSqs / (anova.dat$SumOfSqs + anova.dat$Residual.SumOfSqs)
+
+##Fancy plot
+
+anova.melt <- tidyr::pivot_longer(anova.dat,cols=c("R2"), names_to='measure', values_to="value") %>%
+  add_significance(p.col = "Pr.F.adj", output.col = "PrF.sym",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 0.1,1),
+                   symbols = c("****", "***", "**", "*", "\u02D9", "")
+                   ) %>%
+  arrange(value)
+
+anova.melt.bac <- anova.melt %>% mutate(Variable = gsub("_", " ",Variable))
+
+fancy.anova.bar.bac <- ggbarplot(anova.melt.bac,
+                                         x="Variable",
+                                         y="value",
+                                         #color = "Variable",
+                                         orientation = c("horizontal"),
+                                         color = NA,
+                                         fill = "measure",
+                                         position=position_dodge(0.7),
+                                         label = anova.melt$PrF.sym,
+                                         lab.size = 9,
+                                         lab.vjust = 0.7,
+                                         lab.hjust = -0.3
+                                         
+) +
+  #stat_pvalue_manual(
+  #  adonis.melt,  label = "PrF.sym", tip.length = 0.01
+  #) +
+  #geom_hline(yintercept = 0.05) +
+  ggtitle("Capscale dbRDA effect size: all variables") +
+  ylab(expression(R^2~"value")) +
+  scale_fill_jco()
+
+fancy.anova.bar.bac
+```
+
+## Virome
+
+```{r, eval = T, include = T, echo = F, message = F}
+
+#################################Importing-Data
+
+#standf = function(x, t=total) round(t * (x / sum(x)))
+#total = median(sample_sums(PSV))
+#PSV.R = transform_sample_counts(PSV, standf)
+
+import.otu.table <- as.data.frame(otu_table(PSV)) %>%
+  #dplyr::select(-taxonomy) %>%
+  mutate_all(as.numeric) #Convert to numeric where possible
+
+cure.data = meta.vir
+
+#import.taxonomy = read.table('virome_taxonomy_LCA_known.txt', header = T)
+
+rownames <- rownames(cure.data)
+
+#Remove NA colomns
+
+cure.data <- cure.data[ , ! apply( cure.data , 2 , function(x) all(is.na(x)) ) ]
+
+#Set numeric column class
+cure.data <- cure.data %>% mutate_if(is.character,as.factor)
+#Add back rownames
+
+rownames(cure.data) <- rownames
+
+#cure.data <- cure.data %>% mutate_if(is.character, as.numeric)
+
+X8.nonrarefied = t(import.otu.table)                                                                  ###%%% non-rarefied
+
+
+###rarefying|subsampling reads in every sample
+barplot(colSums(import.otu.table))
+min(colSums(import.otu.table))
+
+rare8 <- t(import.otu.table)
+#rare8 = rarefy(t(import.otu.table), sample = 450000)
+X8.rarefied = as.data.frame(rare8)                                                                 ###%%% rarefied
+
+###Subset metadata to match remaining samples after rarefaction
+
+Y.all = cure.data[rownames(X8.rarefied),]
+
+###Log tranformation
+X = log10(X8.rarefied+1)
+
+#Select relevant numeric column
+
+Y <- dplyr::select(Y.all,c("Twin_pairs", "Days", "Gestational_age", "Birth_weight", "Small_for_gestational_age", "Antenatal_steroids" , "Delivery_mode", "Intrapartum_antibiotic_prophylaxis", "Late_onset_sepsis" , "Necrotizing_enterocolitis", "Patent_ductus_arteriosus", "Bronchopulmonary_dysplasia", "Antibiotics_at_birth", "Total_days_antibiotics_therapy"))
+
+#colnames(Y) #Check remaining columns
+
+###Select only numeric metadata culumns
+
+#Y  <- Y %>% mutate_all(as.numeric)
+
+#colnames(Y) #Check remaining columns
+
+##vifcor
+#collinearity <- vifcor(Y, th  =0.5) #at 0.5 threshold variables have a VIF below 10.00 (<0.21 correlation!)
+#collinearity
+
+#Select relevant columns for that are non-collinear
+
+Y.ad = Y
+#Y.ad <- dplyr::select(Y.all,c("Batch", "Time")
+
+#Y.ad <- Y.all[8:23]
+
+#Remove NA rows
+
+Y.ad <- Y.ad %>% drop_na()
+
+X.ad <- X[rownames(Y.ad),]
+
+#is.na(Y.ad)
+
+##Subset each time point
+### 0
+Y.0 <- dplyr::filter(Y.ad, Days == " 1")
+X.0 <- X[rownames(Y.0),]
+### 15
+Y.15 <- dplyr::filter(Y.ad, Days == "15")
+X.15 <- X[rownames(Y.15),]
+
+### 30
+Y.30 <- dplyr::filter(Y.ad, Days == "30")
+X.30 <- X[rownames(Y.30),]
+
+### 90
+Y.90 <- dplyr::filter(Y.ad, Days == "90")
+X.90 <- X[rownames(Y.90),]
+```
+
+### Db anova - constrained for time point
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+##############Anova on capscale - all variables
+
+anova.m <- matrix(nrow = 0, ncol =6) #Create matrix for results
+colnames(anova.m) <- c("Df","SumOfSqs","F","Pr.F","Residual.Df","Residual.SumOfSqs")                
+for (i in colnames(dplyr::select(Y.ad,-c("Days")))){
+  anova <- as.matrix(anova.cca(capscale(X.ad ~ Y.ad[,i] + Condition(Days), Y.ad, dist = "bray"),permutations = how(nperm=9999)))
+  anova <- c(anova[1,],anova[2,1:2])
+  anova.m <-rbind(anova.m,anova)
+}
+
+rownames(anova.m) <- colnames(dplyr::select(Y.ad,-c("Days")))
+
+#Prepare for plotting
+
+anova.dat <- anova.m %>%
+  as.data.frame() %>%
+  tibble::add_column(Variable = rownames(anova.m),.name_repair = "minimal")
+
+#Add adjusted p-values
+anova.dat$Pr.F.adj <- p.adjust(anova.dat$Pr.F, method = 'holm')
+
+#Show table
+#knitr::kable(anova.dat)
+
+#Calculate sum of squares
+anova.dat$R2 <- anova.dat$SumOfSqs / (anova.dat$SumOfSqs + anova.dat$Residual.SumOfSqs)
+
+##Fancy plot
+
+anova.melt <- tidyr::pivot_longer(anova.dat,cols=c("R2"), names_to='measure', values_to="value") %>%
+  add_significance(p.col = "Pr.F.adj", output.col = "PrF.sym",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 0.1,1),
+                   symbols = c("****", "***", "**", "*", "\u02D9", "")
+                   ) %>%
+  arrange(value)
+
+anova.melt.vir <- anova.melt %>% mutate(Variable = gsub("_", " ",Variable))
+
+fancy.anova.bar.vir <- ggbarplot(anova.melt.vir,
+                                         x="Variable",
+                                         y="value",
+                                         #color = "Variable",
+                                         orientation = c("horizontal"),
+                                         color = NA,
+                                         fill = "measure",
+                                         position=position_dodge(0.7),
+                                         label = anova.melt$PrF.sym,
+                                         lab.size = 9,
+                                         lab.vjust = 0.7,
+                                         lab.hjust = -0.3
+                                         
+) +
+  #stat_pvalue_manual(
+  #  adonis.melt,  label = "PrF.sym", tip.length = 0.01
+  #) +
+  #geom_hline(yintercept = 0.05) +
+  ggtitle("Capscale dbRDA effect size: all variables") +
+  ylab(expression(R^2~"value")) +
+  scale_fill_jco()
+
+fancy.anova.bar.vir
+```
+
+
+## Host virome
+
+```{r, eval = T, include = T, echo = F, message = F}
+
+#################################Importing-Data
+
+# standf = function(x, t=total) round(t * (x / sum(x)))
+# total = median(sample_sums(PSV))
+# PSV.host.RA = transform_sample_counts(PSV.host, standf)
+
+import.otu.table <- as.data.frame(otu_table(PSV.host)) %>%
+  #dplyr::select(-taxonomy) %>%
+  mutate_all(as.numeric) #Convert to numeric where possible 
+
+cure.data = meta.vir
+
+#import.taxonomy = read.table('virome_taxonomy_LCA_known.txt', header = T)
+
+rownames <- rownames(cure.data)
+
+#Remove NA colomns
+
+cure.data <- cure.data[ , ! apply( cure.data , 2 , function(x) all(is.na(x)) ) ]
+
+#Set numeric column class
+cure.data <- cure.data %>% mutate_if(is.character,as.factor)
+#Add back rownames
+
+rownames(cure.data) <- rownames
+
+#cure.data <- cure.data %>% mutate_if(is.character, as.numeric)
+
+X8.nonrarefied = t(import.otu.table)                                                                  ###%%% non-rarefied
+
+
+###rarefying|subsampling reads in every sample
+barplot(colSums(import.otu.table))
+min(colSums(import.otu.table))
+
+rare8 <- t(import.otu.table)
+#rare8 = rarefy(t(import.otu.table), sample = 450000)
+X8.rarefied = as.data.frame(rare8)                                                                 ###%%% rarefied
+
+###Subset metadata to match remaining samples after rarefaction
+
+Y.all = cure.data[rownames(X8.rarefied),]
+
+###Log tranformation
+X = log10(X8.rarefied+1)
+
+#Select relevant numeric column
+
+Y <- dplyr::select(Y.all,c("Twin_pairs", "Days", "Gestational_age", "Birth_weight", "Small_for_gestational_age", "Antenatal_steroids" , "Delivery_mode", "Intrapartum_antibiotic_prophylaxis", "Late_onset_sepsis" , "Necrotizing_enterocolitis", "Patent_ductus_arteriosus", "Bronchopulmonary_dysplasia", "Antibiotics_at_birth", "Total_days_antibiotics_therapy"))
+
+#colnames(Y) #Check remaining columns
+
+###Select only numeric metadata culumns
+
+#Y  <- Y %>% mutate_all(as.numeric)
+
+#colnames(Y) #Check remaining columns
+
+##vifcor
+#collinearity <- vifcor(Y, th  =0.5) #at 0.5 threshold variables have a VIF below 10.00 (<0.21 correlation!)
+#collinearity
+
+#Select relevant columns for that are non-collinear
+
+Y.ad = Y
+#Y.ad <- dplyr::select(Y.all,c("Batch", "Time")
+
+#Y.ad <- Y.all[8:23]
+
+#Remove NA rows
+
+Y.ad <- Y.ad %>% drop_na()
+
+X.ad <- X[rownames(Y.ad),]
+
+#is.na(Y.ad)
+
+##Subset each time point
+### 0
+Y.0 <- dplyr::filter(Y.ad, Days == " 1")
+X.0 <- X[rownames(Y.0),]
+### 15
+Y.15 <- dplyr::filter(Y.ad, Days == "15")
+X.15 <- X[rownames(Y.15),]
+
+### 30
+Y.30 <- dplyr::filter(Y.ad, Days == "30")
+X.30 <- X[rownames(Y.30),]
+
+### 90
+Y.90 <- dplyr::filter(Y.ad, Days == "90")
+X.90 <- X[rownames(Y.90),]
+```
+
+### Db anova - constrained for time point
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+##############Anova on capscale - all variables
+
+anova.m <- matrix(nrow = 0, ncol =6) #Create matrix for results
+colnames(anova.m) <- c("Df","SumOfSqs","F","Pr.F","Residual.Df","Residual.SumOfSqs")                
+for (i in colnames(dplyr::select(Y.ad,-c("Days")))){
+  anova <- as.matrix(anova.cca(capscale(X.ad ~ Y.ad[,i] + Condition(Days), Y.ad, dist = "bray"),permutations = how(nperm=9999)))
+  anova <- c(anova[1,],anova[2,1:2])
+  anova.m <-rbind(anova.m,anova)
+}
+
+rownames(anova.m) <- colnames(dplyr::select(Y.ad,-c("Days")))
+
+#Prepare for plotting
+
+anova.dat <- anova.m %>%
+  as.data.frame() %>%
+  tibble::add_column(Variable = rownames(anova.m),.name_repair = "minimal")
+
+#Add adjusted p-values
+anova.dat$Pr.F.adj <- p.adjust(anova.dat$Pr.F, method = 'holm')
+
+#Show table
+#knitr::kable(anova.dat)
+
+#Calculate sum of squares
+anova.dat$R2 <- anova.dat$SumOfSqs / (anova.dat$SumOfSqs + anova.dat$Residual.SumOfSqs)
+
+##Fancy plot
+
+anova.melt <- tidyr::pivot_longer(anova.dat,cols=c("R2"), names_to='measure', values_to="value") %>%
+  add_significance(p.col = "Pr.F.adj", output.col = "PrF.sym",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 0.1,1),
+                   symbols = c("****", "***", "**", "*", "\u02D9", "")
+                   ) %>%
+  arrange(value)
+
+anova.melt.vir.host <- anova.melt %>% mutate(Variable = gsub("_", " ",Variable))
+
+fancy.anova.bar.vir.host <- ggbarplot(anova.melt.vir.host,
+                                         x="Variable",
+                                         y="value",
+                                         #color = "Variable",
+                                         orientation = c("horizontal"),
+                                         color = NA,
+                                         fill = "measure",
+                                         position=position_dodge(0.7),
+                                         label = anova.melt$PrF.sym,
+                                         lab.size = 9,
+                                         lab.vjust = 0.7,
+                                         lab.hjust = -0.3
+                                         
+) +
+  #stat_pvalue_manual(
+  #  adonis.melt,  label = "PrF.sym", tip.length = 0.01
+  #) +
+  #geom_hline(yintercept = 0.05) +
+  ggtitle("Capscale dbRDA effect size: all variables") +
+  ylab(expression(R^2~"value")) +
+  scale_fill_jco()
+
+fancy.anova.bar.vir.host
+```
+
+## Host virome - Genus
+
+```{r, eval = T, include = T, echo = F, message = F}
+
+#################################Importing-Data
+
+# standf = function(x, t=total) round(t * (x / sum(x)))
+# total = median(sample_sums(PSV))
+# PSV.host.RA = transform_sample_counts(PSV.host, standf)
+
+PSV.CSS.host.genus <- tax_glom(PSV.host,taxrank = "Genus")
+
+import.otu.table <- as.data.frame(otu_table(PSV.CSS.host.genus)) %>%
+  #dplyr::select(-taxonomy) %>%
+  mutate_all(as.numeric) #Convert to numeric where possible 
+
+cure.data = meta.vir
+
+#import.taxonomy = read.table('virome_taxonomy_LCA_known.txt', header = T)
+
+rownames <- rownames(cure.data)
+
+#Remove NA colomns
+
+cure.data <- cure.data[ , ! apply( cure.data , 2 , function(x) all(is.na(x)) ) ]
+
+#Set numeric column class
+cure.data <- cure.data %>% mutate_if(is.character,as.factor)
+#Add back rownames
+
+rownames(cure.data) <- rownames
+
+#cure.data <- cure.data %>% mutate_if(is.character, as.numeric)
+
+X8.nonrarefied = t(import.otu.table)                                                                  ###%%% non-rarefied
+
+
+###rarefying|subsampling reads in every sample
+barplot(colSums(import.otu.table))
+min(colSums(import.otu.table))
+
+rare8 <- t(import.otu.table)
+#rare8 = rarefy(t(import.otu.table), sample = 450000)
+X8.rarefied = as.data.frame(rare8)                                                                 ###%%% rarefied
+
+###Subset metadata to match remaining samples after rarefaction
+
+Y.all = cure.data[rownames(X8.rarefied),]
+
+###Log tranformation
+X = log10(X8.rarefied+1)
+
+#Select relevant numeric column
+
+Y <- dplyr::select(Y.all,c("Twin_pairs", "Days", "Gestational_age", "Birth_weight", "Small_for_gestational_age", "Antenatal_steroids" , "Delivery_mode", "Intrapartum_antibiotic_prophylaxis", "Late_onset_sepsis" , "Necrotizing_enterocolitis", "Patent_ductus_arteriosus", "Bronchopulmonary_dysplasia", "Antibiotics_at_birth", "Total_days_antibiotics_therapy"))
+
+colnames(Y) #Check remaining columns
+
+###Select only numeric metadata culumns
+
+#Y  <- Y %>% mutate_all(as.numeric)
+
+#colnames(Y) #Check remaining columns
+
+##vifcor
+#collinearity <- vifcor(Y, th  =0.5) #at 0.5 threshold variables have a VIF below 10.00 (<0.21 correlation!)
+#collinearity
+
+#Select relevant columns for that are non-collinear
+
+Y.ad = Y
+#Y.ad <- dplyr::select(Y.all,c("Batch", "Time")
+
+#Y.ad <- Y.all[8:23]
+
+#Remove NA rows
+
+Y.ad <- Y.ad %>% drop_na()
+
+X.ad <- X[rownames(Y.ad),]
+
+#is.na(Y.ad)
+
+##Subset each time point
+### 0
+Y.0 <- dplyr::filter(Y.ad, Days == " 1")
+X.0 <- X[rownames(Y.0),]
+### 15
+Y.15 <- dplyr::filter(Y.ad, Days == "15")
+X.15 <- X[rownames(Y.15),]
+
+### 30
+Y.30 <- dplyr::filter(Y.ad, Days == "30")
+X.30 <- X[rownames(Y.30),]
+
+### 90
+Y.90 <- dplyr::filter(Y.ad, Days == "90")
+X.90 <- X[rownames(Y.90),]
+```
+
+### Db anova - constrained for time point
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+##############Anova on capscale - all variables
+
+anova.m <- matrix(nrow = 0, ncol =6) #Create matrix for results
+colnames(anova.m) <- c("Df","SumOfSqs","F","Pr.F","Residual.Df","Residual.SumOfSqs")                
+for (i in colnames(dplyr::select(Y.ad,-c("Days")))){
+  anova <- as.matrix(anova.cca(capscale(X.ad ~ Y.ad[,i] + Condition(Days), Y.ad, dist = "bray"),permutations = how(nperm=9999)))
+  anova <- c(anova[1,],anova[2,1:2])
+  anova.m <-rbind(anova.m,anova)
+}
+
+rownames(anova.m) <- colnames(dplyr::select(Y.ad,-c("Days")))
+
+#Prepare for plotting
+
+anova.dat <- anova.m %>%
+  as.data.frame() %>%
+  tibble::add_column(Variable = rownames(anova.m),.name_repair = "minimal")
+
+#Add adjusted p-values
+anova.dat$Pr.F.adj <- p.adjust(anova.dat$Pr.F, method = 'holm')
+
+#Show table
+#knitr::kable(anova.dat)
+
+#Calculate sum of squares
+anova.dat$R2 <- anova.dat$SumOfSqs / (anova.dat$SumOfSqs + anova.dat$Residual.SumOfSqs)
+
+##Fancy plot
+
+anova.melt <- tidyr::pivot_longer(anova.dat,cols=c("R2"), names_to='measure', values_to="value") %>%
+  add_significance(p.col = "Pr.F.adj", output.col = "PrF.sym",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 0.1,1),
+                   symbols = c("****", "***", "**", "*", "\u02D9", "")
+                   ) %>%
+  arrange(value)
+
+anova.melt.vir.host <- anova.melt %>% mutate(Variable = gsub("_", " ",Variable))
+
+fancy.anova.bar.vir.host <- ggbarplot(anova.melt.vir.host,
+                                         x="Variable",
+                                         y="value",
+                                         #color = "Variable",
+                                         orientation = c("horizontal"),
+                                         color = NA,
+                                         fill = "measure",
+                                         position=position_dodge(0.7),
+                                         label = anova.melt$PrF.sym,
+                                         lab.size = 9,
+                                         lab.vjust = 0.7,
+                                         lab.hjust = -0.3
+                                         
+) +
+  #stat_pvalue_manual(
+  #  adonis.melt,  label = "PrF.sym", tip.length = 0.01
+  #) +
+  #geom_hline(yintercept = 0.05) +
+  ggtitle("Capscale dbRDA effect size: all variables") +
+  ylab(expression(R^2~"value")) +
+  scale_fill_jco()
+
+fancy.anova.bar.vir.host
+```
+
+## Combined effect size plots
+
+### With viral hosts
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=8, fig.height=6}
+anova.melt.bac$Community <- "Bacteria"
+anova.melt.vir$Community <- "Vira"
+anova.melt.vir.host$Community <- "Viral host"
+
+# Rename variables
+
+anova.melt.comb <- rbind(anova.melt.bac,anova.melt.vir,anova.melt.vir.host)
+
+anova.melt.comb$Variable.clean <- gsub("_"," ",anova.melt.comb$Variable)
+
+
+fancy.anova.bar.comb.host <- ggbarplot(anova.melt.comb,
+                                         x="Variable.clean",
+                                         y="value",
+                                         ylab = FALSE,
+                                         fill = "Community",
+                                         orientation = c("horizontal"),
+                                         #fill = "measure",
+                                         position=position_dodge(0.85),
+                                         label = anova.melt$PrF.sym,
+                                         lab.size = 8,
+                                         lab.vjust = 0.8,
+                                         lab.hjust = -0.1
+                                         
+) +
+  theme(axis.text.y=element_text(angle = 45),
+        plot.margin = unit(c(0.1, 0.2, 0.7, 0.1), "inches")) +
+  ylab(expression(R^2~"value")) +
+  scale_fill_jco()
+
+fancy.anova.bar.comb.host
+
+```
+
+### Bacteria vs vira only
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=6, fig.height=6}
+
+
+anova.melt.bac$Community <- "Bacteria"
+anova.melt.vir$Community <- "Vira"
+
+# Rename variables
+
+anova.melt.comb <- rbind(anova.melt.bac,anova.melt.vir)
+
+anova.melt.comb$Variable.clean <- gsub("_"," ",anova.melt.comb$Variable)
+
+
+fancy.anova.bar.comb <- ggbarplot(anova.melt.comb,
+                                         x="Variable.clean",
+                                         y="value",
+                                          ylab = FALSE,
+                                         fill = "Community",
+                                         orientation = c("horizontal"),
+                                         #fill = "measure",
+                                         position=position_dodge(0.7),
+                                         label = anova.melt$PrF.sym,
+                                         lab.size = 7,
+                                         lab.vjust = 0.8,
+                                         lab.hjust = -0.3
+                                         
+) +
+  theme(axis.text.y=element_text(angle = 45),
+        plot.margin = unit(c(0.1, 0.2, 0.7, 0.1), "inches")) +
+  ylab(expression(R^2~"value")) +
+  scale_fill_jco()
+
+fancy.anova.bar.comb
+
+```
+
+# Rabuplot
+
+## Time
+
+```{r, message = F}
+#remotes::install_github("jstokholm/rabuplot")
+library(rabuplot)
+
+PSV.host@sam_data$Days <- factor(PSV.host@sam_data$Days, levels = c("90","60","30","15","1"))
+PSB@sam_data$Days <- factor(PSB@sam_data$Days, levels = c("90","60","30","15","1"))
+
+rabu.vir <- rabuplot(
+  PSV.host,
+  violin = TRUE, predictor = "Days", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:4]) +
+  ggtitle("Viral hosts")
+
+rabu.bac <- rabuplot(
+  PSB,
+  violin = TRUE, predictor = "Days", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:4]) +
+  #theme(legend.position = "none") +
+  ggtitle("Bacteria")
+
+ggarrange(rabu.bac,rabu.vir, common.legend = TRUE, legend = "bottom")
+```
+
+## Bronchopulmonary_dysplasia
+
+```{r, message = F}
+#remotes::install_github("jstokholm/rabuplot")
+library(rabuplot)
+
+rabu.vir.bpd <- rabuplot(
+  PSV.host,
+  violin = TRUE, predictor = "Bronchopulmonary_dysplasia", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:2]) +
+  ggtitle("Viral hosts") +
+  scale_x_discrete(limits = rev)
+
+rabu.bac.bpd <- rabuplot(
+  PSB,
+  violin = TRUE, predictor = "Bronchopulmonary_dysplasia", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:2]) +
+  #theme(legend.position = "none") +
+  ggtitle("Bacteria") +
+  scale_x_discrete(limits = rev)
+
+ggarrange(rabu.bac.bpd,rabu.vir.bpd, common.legend = TRUE, legend = "bottom")
+```
+
+## Intrapartum antibiotics
+
+```{r, message = F}
+#remotes::install_github("jstokholm/rabuplot")
+library(rabuplot)
+
+rabu.vir.tdab <- rabuplot(
+  PSV.host,
+  violin = TRUE, predictor = "Intrapartum_antibiotic_prophylaxis", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:3]) +
+  ggtitle("Viral hosts") +
+  scale_x_discrete(limits = rev)
+
+rabu.bac.tdab <- rabuplot(
+  PSB,
+  violin = TRUE, predictor = "Intrapartum_antibiotic_prophylaxis", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:3]) +
+  #theme(legend.position = "none") +
+  ggtitle("Bacteria") +
+  scale_x_discrete(limits = rev)
+
+ggarrange(rabu.bac.tdab,rabu.vir.tdab, common.legend = TRUE, legend = "bottom")
+```
+
+## Total days antibiotics treatment
+
+```{r, message = F}
+#remotes::install_github("jstokholm/rabuplot")
+library(rabuplot)
+
+rabu.vir.iap <- rabuplot(
+  PSV.host,
+  violin = TRUE, predictor = "Total_days_antibiotics_therapy", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:3]) +
+  ggtitle("Viral hosts") +
+  scale_x_discrete(limits = rev)
+
+rabu.bac.iap <- rabuplot(
+  PSB,
+  violin = TRUE, predictor = "Total_days_antibiotics_therapy", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:3]) +
+  #theme(legend.position = "none") +
+  ggtitle("Bacteria") +
+  scale_x_discrete(limits = rev)
+
+ggarrange(rabu.bac.iap,rabu.vir.iap, common.legend = TRUE, legend = "bottom")
+```
+
+## Antibiotics at birth
+
+```{r, message = F}
+#remotes::install_github("jstokholm/rabuplot")
+library(rabuplot)
+
+rabu.vir.tdab <- rabuplot(
+  PSV.host,
+  violin = TRUE, predictor = "Antibiotics_at_birth", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:3]) +
+  ggtitle("Viral hosts") +
+  scale_x_discrete(limits = rev)
+
+rabu.bac.tdab <- rabuplot(
+  PSB,
+  violin = TRUE, predictor = "Antibiotics_at_birth", p_adjust = TRUE, N_taxa = 10, colors = col_fil[1:3]) +
+  #theme(legend.position = "none") +
+  ggtitle("Bacteria") +
+  scale_x_discrete(limits = rev)
+
+ggarrange(rabu.bac.tdab,rabu.vir.tdab, common.legend = TRUE, legend = "bottom")
+```
+
+## Small for gestational age
+
+```{r, message = F}
+#remotes::install_github("jstokholm/rabuplot")
+library(rabuplot)
+
+rabu.vir.sga <- rabuplot(
+  PSV.host,
+  violin = TRUE, predictor = "Small_for_gestational_age", p_adjust = TRUE, N_taxa = 10, colors = col_fil[3:4]) +
+  ggtitle("Viral hosts") +
+  scale_x_discrete(limits = rev)
+
+rabu.bac.sga <- rabuplot(
+  PSB,
+  violin = TRUE, predictor = "Small_for_gestational_age", p_adjust = TRUE, N_taxa = 10, colors = col_fil[3:4]) +
+  #theme(legend.position = "none") +
+  ggtitle("Bacteria") +
+  scale_x_discrete(limits = rev)
+
+ggarrange(rabu.bac.sga,rabu.vir.sga, common.legend = TRUE, legend = "bottom")
+```
+
+# Differential abundance - Deseq2
+
+## Days
+
+### Bacteria
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+#Settings for cutoff values for plotting
+alpha = 0.05 #minimum p-value
+beta = 2 #minimum log-fold difference 
+
+PSB.pseu <- subset_samples(PSB, Days %in% c(15,90))
+
+#PSB.pseu@sam_data$Days <- as.factor(PSB.pseu@sam_data$Days)
+
+otu_table(PSB.pseu) = otu_table(PSB.pseu)+1
+
+diagdds = phyloseq_to_deseq2(PSB.pseu, ~ Days)
+diagdds = DESeq2::DESeq(diagdds, test="Wald", fitType="parametric")
+
+res = results(diagdds, cooksCutoff = FALSE)
+
+sigtab = res[which(res$padj < alpha & abs(res$log2FoldChange) > beta),] #Select values from results file with adj p values>alpha AND log2fold cahnge>beta
+sigtab = cbind(as(sigtab, "data.frame"), as.matrix(phyloseq::tax_table(PSB)[rownames(sigtab), ]))
+#head(sigtab)
+
+#Plotting - genus
+# Order order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Order = factor(as.character(sigtab$Order), levels=names(x))
+# Genus order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+diffplot <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Order)) + geom_point(size=6) + 
+  scale_colour_jco() +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+
+  ggtitle("Differential abundance by Gestational age")
+
+
+##Heatmap of differentially abundant species
+
+#PSB.diff <- merge_phyloseq(subset(otu_table(PSB), rownames(otu_table(PSB)) %in% rownames(sigtab)),phyloseq::tax_table(PSB), sample_data(PSB))
+
+PSB.rel <- microbiome::transform(PSB, "compositional")
+
+PSB.diff.rel <- merge_phyloseq(subset(otu_table(PSB.rel), rownames(otu_table(PSB.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSB.rel), sample_data(PSB.rel))
+
+ampvis2_PSB.diff.rel <- amp_load(PSB.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSB.diff.rel$abund <- ampvis2_PSB.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+amp_heatmap(ampvis2_PSB.diff.rel,
+            group_by = "Days",
+            tax_aggregate = "Species",
+            tax_show = 12,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Differentially abundant bacterial genera days") +
+  scale_x_discrete(limits = rev)
+
+```
+
+### Virome
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+#Settings for cutoff values for plotting
+alpha = 0.05 #minimum p-value
+beta = 2 #minimum log-fold difference 
+
+PSV.pseu <- subset_samples(PSV, Days %in% c(15,90))
+#PSV.pseu <- PSV
+
+#PSV.pseu@sam_data$Days <- as.factor(PSV.pseu@sam_data$Days)
+
+otu_table(PSV.pseu) = otu_table(PSV.pseu)+1 #Add spudocount of one to avoid DESeq2 error(log transformation fill be performed anyways)
+
+diagdds = phyloseq_to_deseq2(PSV.pseu, ~ Days)
+diagdds = DESeq2::DESeq(diagdds, test="Wald", fitType="parametric")
+
+res = results(diagdds, cooksCutoff = FALSE)
+
+sigtab = res[which(res$padj < alpha & abs(res$log2FoldChange) > beta),] #Select values from results file with adj p values>alpha AND log2fold cahnge>beta
+sigtab = cbind(as(sigtab, "data.frame"), as.matrix(phyloseq::tax_table(PSV)[rownames(sigtab), ]))
+#head(sigtab)
+
+#Plotting - genus
+# Order order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Order = factor(as.character(sigtab$Order), levels=names(x))
+# Genus order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+diffplot <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Order)) + geom_point(size=6) + 
+  scale_colour_jco() +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+
+  ggtitle("Differential abundance by Gestational age")
+
+
+##Heatmap of differentially abundant species
+
+#PSV.diff <- merge_phyloseq(subset(otu_table(PSV), rownames(otu_table(PSV)) %in% rownames(sigtab)),phyloseq::tax_table(PSV), sample_data(PSV))
+
+PSV.rel <- microbiome::transform(PSV, "compositional")
+
+PSV.diff.rel <- merge_phyloseq(subset(otu_table(PSV.rel), rownames(otu_table(PSV.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSV.rel), sample_data(PSV.rel))
+
+
+#glom <- tax_glom(subset_taxa(PSV.diff, Kingdom != ""), "Species", NArm = FALSE)
+
+#Remove Realm from phyloseq::tax_table
+PSV.diff.rel@tax_table <- phyloseq::tax_table(PSV.diff.rel)[,c(1,3:8)]
+
+ampvis2_PSV.diff.rel <- ampvis2::amp_load(PSV.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSV.diff.rel$abund <- ampvis2_PSV.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+amp_heatmap(ampvis2_PSV.diff.rel,
+            group_by = "Days",
+            tax_aggregate = "Species",
+            tax_show = 15,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Differentially abundant viral species")
+
+```
+
+### Virome hosts
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+
+PSV.rel <- microbiome::transform(PSV.host, "compositional")
+
+PSV.diff.rel <- merge_phyloseq(subset(otu_table(PSV.rel), rownames(otu_table(PSV.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSV.rel), sample_data(PSV.rel))
+
+
+#glom <- tax_glom(subset_taxa(PSV.diff, Kingdom != ""), "Species", NArm = FALSE)
+
+#Remove Realm from phyloseq::tax_table
+#PSV.diff.rel@tax_table <- phyloseq::tax_table(PSV.diff.rel)[,c(1,3:8)]
+
+ampvis2_PSV.diff.rel <- ampvis2::amp_load(PSV.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSV.diff.rel$abund <- ampvis2_PSV.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+amp_heatmap(ampvis2_PSV.diff.rel,
+            group_by = "Days",
+            tax_aggregate = "Genus",
+            tax_show = 11,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Differentially abundant viruses by predicted host genera") +
+  scale_x_discrete(limits = rev)
+
+```
+
+## BPD
+
+### Bacteria
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+#Settings for cutoff values for plotting
+alpha = 0.05 #minimum p-value
+beta = 2 #minimum log-fold difference 
+
+PSB.pseu <- PSB
+
+#PSB.pseu@sam_data$BPD <- as.factor(PSB.pseu@sam_data$BPD)
+
+otu_table(PSB.pseu) = otu_table(PSB.pseu) + 1 #Add spudocount of one to avoid DESeq2 error(log transformation fill be performed anyways)
+
+diagdds = phyloseq_to_deseq2(PSB.pseu, ~ Bronchopulmonary_dysplasia+Days)
+diagdds = DESeq2::DESeq(diagdds, test="Wald", fitType="parametric")
+
+res = results(diagdds, cooksCutoff = FALSE)
+
+sigtab = res[which(res$padj < alpha & abs(res$log2FoldChange) > beta),] #Select values from results file with adj p values>alpha AND log2fold cahnge>beta
+sigtab = cbind(as(sigtab, "data.frame"), as.matrix(phyloseq::tax_table(PSB)[rownames(sigtab), ]))
+#head(sigtab)
+
+#Plotting - genus
+# Order order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Order = factor(as.character(sigtab$Order), levels=names(x))
+# Genus order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+diffplot <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Order)) + geom_point(size=6) + 
+  scale_colour_jco() +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+
+  ggtitle("Differential abundance by Gestational age")
+
+
+##Heatmap of differentially abundant species
+
+#PSB.diff <- merge_phyloseq(subset(otu_table(PSB), rownames(otu_table(PSB)) %in% rownames(sigtab)),phyloseq::tax_table(PSB), sample_data(PSB))
+
+PSB.rel <- microbiome::transform(PSB, "compositional")
+
+PSB.diff.rel <- merge_phyloseq(subset(otu_table(PSB.rel), rownames(otu_table(PSB.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSB.rel), sample_data(PSB.rel))
+
+
+#glom <- tax_glom(subset_taxa(PSB.diff, Kingdom != ""), "Species", NArm = FALSE)
+
+
+ampvis2_PSB.diff.rel <- ampvis2::amp_load(PSB.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSB.diff.rel$abund <- ampvis2_PSB.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+deseq2_amp_bpd_bac <- amp_heatmap(ampvis2_PSB.diff.rel,
+            group_by = "Bronchopulmonary_dysplasia",
+            tax_aggregate = "Genus",
+            tax_show = 12,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Bacteria") +
+  scale_x_discrete(limits = rev)
+
+deseq2_amp_bpd_bac
+```
+
+### Virome
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+#Settings for cutoff values for plotting
+alpha = 0.05 #minimum p-value
+beta = 2 #minimum log-fold difference 
+
+PSV.pseu <- PSV
+
+#PSV.pseu@sam_data$BPD <- as.factor(PSV.pseu@sam_data$BPD)
+
+otu_table(PSV.pseu) = otu_table(PSV.pseu)+1 #Add spudocount of one to avoid DESeq2 error(log transformation fill be performed anyways)
+
+diagdds = phyloseq_to_deseq2(PSV.pseu, ~ Bronchopulmonary_dysplasia+Days)
+diagdds = DESeq2::DESeq(diagdds, test="Wald", fitType="parametric")
+
+res = results(diagdds, cooksCutoff = FALSE)
+
+sigtab = res[which(res$padj < alpha & abs(res$log2FoldChange) > beta),] #Select values from results file with adj p values>alpha AND log2fold cahnge>beta
+sigtab = cbind(as(sigtab, "data.frame"), as.matrix(phyloseq::tax_table(PSV)[rownames(sigtab), ]))
+#head(sigtab)
+
+#Plotting - genus
+# Order order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Order = factor(as.character(sigtab$Order), levels=names(x))
+# Genus order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+diffplot <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Order)) + geom_point(size=6) + 
+  scale_colour_jco() +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+
+  ggtitle("Differential abundance by Gestational age")
+
+
+##Heatmap of differentially abundant species
+
+#PSV.diff <- merge_phyloseq(subset(otu_table(PSV), rownames(otu_table(PSV)) %in% rownames(sigtab)),phyloseq::tax_table(PSV), sample_data(PSV))
+
+PSV.rel <- microbiome::transform(PSV, "compositional")
+
+PSV.diff.rel <- merge_phyloseq(subset(otu_table(PSV.rel), rownames(otu_table(PSV.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSV.rel), sample_data(PSV.rel))
+
+
+#glom <- tax_glom(subset_taxa(PSV.diff, Kingdom != ""), "Species", NArm = FALSE)
+
+#Remove Realm from phyloseq::tax_table
+PSV.diff.rel@tax_table <- phyloseq::tax_table(PSV.diff.rel)[,c(1,3:8)]
+
+ampvis2_PSV.diff.rel <- ampvis2::amp_load(PSV.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSV.diff.rel$abund <- ampvis2_PSV.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+amp_heatmap(ampvis2_PSV.diff.rel,
+            group_by = "Bronchopulmonary_dysplasia",
+            tax_aggregate = "Species",
+            tax_show = 12,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Differentially abundant viral species") +
+  scale_x_discrete(limits = rev)
+
+```
+
+### Viral hosts
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+
+PSV.rel <- microbiome::transform(PSV.host, "compositional")
+
+PSV.diff.rel <- merge_phyloseq(subset(otu_table(PSV.rel), rownames(otu_table(PSV.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSV.rel), sample_data(PSV.rel))
+
+
+#glom <- tax_glom(subset_taxa(PSV.diff, Kingdom != ""), "Species", NArm = FALSE)
+
+#Remove Realm from phyloseq::tax_table
+#PSV.diff.rel@tax_table <- phyloseq::tax_table(PSV.diff.rel)[,c(1,3:8)]
+
+ampvis2_PSV.diff.rel <- ampvis2::amp_load(PSV.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSV.diff.rel$abund <- ampvis2_PSV.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+deseq2_amp_bpd_vir_host <- amp_heatmap(ampvis2_PSV.diff.rel,
+            group_by = "Bronchopulmonary_dysplasia",
+            tax_aggregate = "Genus",
+            tax_show = 11,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Viral host") +
+  scale_x_discrete(limits = rev)
+
+deseq2_amp_bpd_vir_host
+```
+
+## Small for gestational age
+
+### Bacteria
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+#Settings for cutoff values for plotting
+alpha = 0.05 #minimum p-value
+beta = 2 #minimum log-fold difference 
+
+PSB.pseu <- PSB
+
+#PSB.pseu@sam_data$BPD <- as.factor(PSB.pseu@sam_data$BPD)
+
+otu_table(PSB.pseu) = otu_table(PSB.pseu) + 1 #Add spudocount of one to avoid DESeq2 error(log transformation fill be performed anyways)
+
+diagdds = phyloseq_to_deseq2(PSB.pseu, ~ Small_for_gestational_age+Days)
+diagdds = DESeq2::DESeq(diagdds, test="Wald", fitType="parametric")
+
+res = results(diagdds, cooksCutoff = FALSE)
+
+sigtab = res[which(res$padj < alpha & abs(res$log2FoldChange) > beta),] #Select values from results file with adj p values>alpha AND log2fold cahnge>beta
+sigtab = cbind(as(sigtab, "data.frame"), as.matrix(phyloseq::tax_table(PSB)[rownames(sigtab), ]))
+#head(sigtab)
+
+#Plotting - genus
+# Order order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Order = factor(as.character(sigtab$Order), levels=names(x))
+# Genus order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+diffplot <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Order)) + geom_point(size=6) + 
+  scale_colour_jco() +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+
+  ggtitle("Differential abundance by Gestational age")
+
+
+##Heatmap of differentially abundant species
+
+#PSB.diff <- merge_phyloseq(subset(otu_table(PSB), rownames(otu_table(PSB)) %in% rownames(sigtab)),phyloseq::tax_table(PSB), sample_data(PSB))
+
+PSB.rel <- microbiome::transform(PSB, "compositional")
+
+PSB.diff.rel <- merge_phyloseq(subset(otu_table(PSB.rel), rownames(otu_table(PSB.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSB.rel), sample_data(PSB.rel))
+
+
+#glom <- tax_glom(subset_taxa(PSB.diff, Kingdom != ""), "Species", NArm = FALSE)
+
+
+ampvis2_PSB.diff.rel <- ampvis2::amp_load(PSB.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSB.diff.rel$abund <- ampvis2_PSB.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+deseq2_amp_sga_bac <- amp_heatmap(ampvis2_PSB.diff.rel,
+            group_by = "Small_for_gestational_age",
+            tax_aggregate = "Genus",
+            tax_show = 12,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Bacteria") +
+  scale_x_discrete(limits = rev)
+
+deseq2_amp_sga_bac
+```
+
+### Virome
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+#Settings for cutoff values for plotting
+alpha = 0.05 #minimum p-value
+beta = 2 #minimum log-fold difference 
+
+PSV.pseu <- PSV
+
+#PSV.pseu@sam_data$BPD <- as.factor(PSV.pseu@sam_data$BPD)
+
+otu_table(PSV.pseu) = otu_table(PSV.pseu)+1 #Add spudocount of one to avoid DESeq2 error(log transformation fill be performed anyways)
+
+diagdds = phyloseq_to_deseq2(PSV.pseu, ~ Small_for_gestational_age+Days)
+diagdds = DESeq2::DESeq(diagdds, test="Wald", fitType="parametric")
+
+res = results(diagdds, cooksCutoff = FALSE)
+
+sigtab = res[which(res$padj < alpha & abs(res$log2FoldChange) > beta),] #Select values from results file with adj p values>alpha AND log2fold cahnge>beta
+sigtab = cbind(as(sigtab, "data.frame"), as.matrix(phyloseq::tax_table(PSV)[rownames(sigtab), ]))
+#head(sigtab)
+
+#Plotting - genus
+# Order order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Order = factor(as.character(sigtab$Order), levels=names(x))
+# Genus order based on abundance 
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+diffplot <- ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Order)) + geom_point(size=6) + 
+  scale_colour_jco() +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5))+
+  ggtitle("Differential abundance by Gestational age")
+
+
+##Heatmap of differentially abundant species
+
+#PSV.diff <- merge_phyloseq(subset(otu_table(PSV), rownames(otu_table(PSV)) %in% rownames(sigtab)),phyloseq::tax_table(PSV), sample_data(PSV))
+
+PSV.rel <- microbiome::transform(PSV, "compositional")
+
+PSV.diff.rel <- merge_phyloseq(subset(otu_table(PSV.rel), rownames(otu_table(PSV.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSV.rel), sample_data(PSV.rel))
+
+
+#glom <- tax_glom(subset_taxa(PSV.diff, Kingdom != ""), "Species", NArm = FALSE)
+
+#Remove Realm from phyloseq::tax_table
+PSV.diff.rel@tax_table <- phyloseq::tax_table(PSV.diff.rel)[,c(1,3:8)]
+
+ampvis2_PSV.diff.rel <- ampvis2::amp_load(PSV.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSV.diff.rel$abund <- ampvis2_PSV.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+amp_heatmap(ampvis2_PSV.diff.rel,
+            group_by = "Small_for_gestational_age",
+            tax_aggregate = "Species",
+            tax_show = 12,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Differentially abundant viral species") +
+  scale_x_discrete(limits = rev)
+
+```
+
+### Viral hosts
+
+```{r, eval = T, include = T, echo = F, message = F, warning=F}
+
+PSV.rel <- microbiome::transform(PSV.host, "compositional")
+
+PSV.diff.rel <- merge_phyloseq(subset(otu_table(PSV.rel), rownames(otu_table(PSV.rel)) %in% rownames(sigtab)),phyloseq::tax_table(PSV.rel), sample_data(PSV.rel))
+
+
+#glom <- tax_glom(subset_taxa(PSV.diff, Kingdom != ""), "Species", NArm = FALSE)
+
+#Remove Realm from phyloseq::tax_table
+#PSV.diff.rel@tax_table <- phyloseq::tax_table(PSV.diff.rel)[,c(1,3:8)]
+
+ampvis2_PSV.diff.rel <- ampvis2::amp_load(PSV.diff.rel) #Convert phyloseq to ampvis2 object
+
+ampvis2_PSV.diff.rel$abund <- ampvis2_PSV.diff.rel$abund*100 #Multiply relative abundance by 100 for read percentage
+
+deseq2_amp_sga_vir_host <- amp_heatmap(ampvis2_PSV.diff.rel,
+            group_by = "Small_for_gestational_age",
+            tax_aggregate = "Genus",
+            tax_show = 11,
+            normalise = FALSE,
+            tax_empty = "best",
+            tax_add = "Family") +
+  theme_classic() +
+  ggtitle("Viral host") +
+  scale_x_discrete(limits = rev)
+
+deseq2_amp_sga_vir_host
+```
+
+# Cross correlation 
+
+## rCCA
+
+### Conversion and screeplot
+
+```{r, eval = T, include = T, echo = T, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+#Subset samples present in both
+vir_ids <- PSV@sam_data$description %>% str_split_i("_",-1)
+PSV@sam_data$id <- vir_ids
+
+PSB.CSS.both <- subset_samples(PSB,description %in% vir_ids)
+#PSV.CSS.both <- subset_samples(PSV.CSS,vir_ids %in% PSB.CSS.both@sam_data$description)
+PSV.CSS.host.both <- subset_samples(PSV.CSS.host,vir_ids %in% PSB.CSS.both@sam_data$description)
+
+##Transpose and convert to dataframes
+botu <- data.frame(PSB.CSS.both@otu_table)
+#Select last non-empty taxonomic rank
+tax.bac <- as.data.frame(PSB.CSS.both@tax_table) %>% dplyr::mutate_all(~na_if(., '')) %>% apply(.,1, function(x) tail(stats::na.omit(x), 1))
+rownames(botu) <- paste(rownames(botu),tax.bac, sep = "-")
+
+votu <- data.frame(PSV.CSS.host.both@otu_table)
+#Select last non-empty taxonomic rank
+tax.vir <- as.data.frame(PSV.CSS.host.both@tax_table) %>% dplyr::mutate_all(~na_if(., '')) %>% apply(.,1, function(x) tail(stats::na.omit(x), 1))
+rownames(votu) <- paste(rownames(votu),tax.vir, sep = "-")
+
+
+  ###########Convert to matrix and transpose - Maybe skip?
+t(as.matrix.data.frame(botu))->tmbacteria
+  #Save OTU Taxonomy from header
+tmcolnames <- colnames(tmbacteria)
+  #Remove first line
+rownames(tmbacteria) <- NULL
+  #Apply as.numeric to matrix(will remove header as it is in characters)
+nbacteria <- mapply(tmbacteria, FUN=as.numeric)
+  #Convert back into matrix and add colnames
+mbacteria <- matrix(nbacteria, ncol=NCOL(tmbacteria), nrow=NROW(tmbacteria))
+colnames(mbacteria) <- tmcolnames
+
+  
+    ##Repeat for viral OTU table
+t(as.matrix.data.frame(votu))->tmvirome
+tmcolnames <- colnames(tmvirome)
+rownames(tmvirome) <- NULL
+nvirome <- mapply(tmvirome, FUN=as.numeric)
+mvirome <- matrix(nvirome, ncol=NCOL(tmvirome), nrow=NROW(tmvirome))
+colnames(mvirome) <- tmcolnames
+    ##Alternatively use: data.matrix(frame, rownames.force = NA)
+
+    ##Converting and removing near-zero variance values
+bac <- mbacteria[,-c(1)]
+nzv <- nearZeroVar(bac)
+bac <- bac[, -nzv$Position]
+           
+           
+vir <- mvirome[,-c(1)]
+#nzv <- nearZeroVar(vir) # If any
+#vir <- vir[, -nzv$Position]
+
+
+  #PCA
+library(vegan)
+mod_bac <- rda(bac, scale = TRUE)
+plot(mod_bac, scaling = 3)
+screeplot(mod_bac)
+mod_vir <- rda(vir, scale = TRUE)
+plot(mod_vir, scaling = 3)
+screeplot(mod_vir)
+
+scaling = "shrinkage"
+  #Apply scaling 
+result_1comp <- rcc(bac, vir, method = scaling, ncomp = 1)
+result_2comp <- rcc(bac, vir, method = scaling, ncomp = 2)
+result_3comp <- rcc(bac, vir, method = scaling, ncomp = 3)
+result_4comp <- rcc(bac, vir, method = scaling, ncomp = 4)
+
+ggarrange(plot(result_1comp, type = "barplot"),
+          plot(result_2comp, type = "barplot"),
+          plot(result_3comp, type = "barplot"),
+          plot(result_4comp, type = "barplot")
+          ,nrow = 2)
+
+# produce a heat map of the cross correlation matrix
+imgCor(bac, vir, sideColors = c("purple", "green")) 
+```
+
+### Model tuning
+
+```{r, eval = T, include = T, echo = T, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+# set grid search values for each regularisation parameter
+grid1 <- seq(0.001, 0.2, length = 20) 
+grid2 <- seq(0.001, 0.2, length = 20)
+
+# optimise the regularisation parameter values
+sl(cv.tune.rcc, tune.rcc(bac, vir, grid1 = grid1, grid2 = grid2, 
+                                   validation = "loo"),overwrite = F)
+
+# examine the results of CV tuning
+plot(cv.tune.rcc)
+cv.tune.rcc
+
+#manually set lambda scores
+#opt.l1 <- 1.7
+#opt.l2 <- 0.003
+opt.l1 <- cv.tune.rcc$opt.lambda1
+opt.l2 <- cv.tune.rcc$opt.lambda2
+```
+
+### Model and component selection
+
+```{r, eval = T, include = T, echo = T, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+shrink.rcc <- rcc(bac, vir, method = "shrinkage")
+
+CV.rcc <- rcc(bac, vir, method = "ridge", 
+                         lambda1 = opt.l1,
+                         lambda2 = opt.l2) 
+
+# barplot of cross validation method rCCA canonical correlations
+plot(CV.rcc, type = "barplot", main = "Cross Validation") 
+
+# barplot of shrinkage method rCCA canonical correlations
+plot(shrink.rcc, type = "barplot", main = "Shrinkage")
+```
+
+### Run model
+
+```{r, eval = T, include = T, echo = T, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+#Perfrom optimised CV rCCA
+
+result.CV <- rcc(bac, vir, method = "ridge",
+                         lambda1 = opt.l1,
+                         lambda2 = opt.l2,
+              ncomp=3)
+
+result.raw <- rcc(bac, vir, method = "shrinkage",ncomp=3)
+
+#Remove OTU IDs to only show taxonomy
+result <- result.raw
+
+result$names$colnames$X <- gsub(".*\\-", "", result$names$colnames$X) %>% make.unique(sep="_")
+result$names$colnames$Y <- gsub(".*\\-", "", result$names$colnames$Y) %>% make.unique(sep="_")
+
+
+# colnames(result$X) <- gsub(".*\\-", "", colnames(result$X))
+# colnames(result$Y) <- gsub(".*\\-", "", colnames(result$Y))
+
+# rownames(result$loadings$X) <- gsub(".*\\-", "", rownames(result$loadings$X))
+# rownames(result$loadings$Y) <- gsub(".*\\-", "", rownames(result$loadings$Y))
+
+
+```
+
+### Visualization
+
+#### Heatmaps 
+
+```{r, eval = T, include = T, echo = T, message = F, warning =  F, fig.fullwidth = TRUE}
+#Defne pallette to only add colour to only high
+##Generate new pallette
+palette <- hcl.colors(200, palette = "Zissou 1", alpha = NULL, rev = FALSE, fixup = TRUE) #Seclect palette https://developer.r-project.org/Blog/public/2019/04/01/hcl-based-color-palettes-in-grdevices/
+palette[61:140] <- "white" #Select which part of pallette to replace with white
+
+# high4_2c <- cim(result, comp = 1:2, ylab = "Bacteria", xlab = "Virome", margins = c(12,18),cutoff = 0.4, color = palette)
+# high45_2c <- cim(result, comp = 1:2, ylab = "Bacteria", xlab = "Virome", margins = c(12,18),cutoff = 0.45, color = palette)
+#high5_3c <- cim(result, comp = 1:2, ylab = "Bacteria", xlab = "Virome", margins = c(12,18),cutoff = 0.5, color = palette)
+
+#pdf(filename="high5_3c.pdf", res = 600, width = 4000, height = 4000)
+#high5_3c
+#dev.off()
+
+######
+
+high6_3c <- cim(result, comp = 1:3, ylab = "Bacteria", xlab = "Virome host prediction", margins = c(7,9),cutoff = 0.6, color = palette)
+high5_3c <- cim(result, comp = 1:3, ylab = "Bacteria", xlab = "Virome host prediction", margins = c(7,9),cutoff = 0.5, color = palette)
+high45_3c<- cim(result, comp = 1:3, ylab = "Bacteria", xlab = "Virome host prediction", margins = c(15,20),cutoff = 0.45, color = palette)
+high4_3c <- cim(result, comp = 1:3, ylab = "Bacteria", xlab = "Virome host prediction", margins = c(15,20),cutoff = 0.4, color = palette)
+
+#mat5 <- high5_2c$mat
+mat6_3c <- high6_3c$mat
+mat45_3c <- high45_3c$mat
+mat4_3c <- high4_3c$mat
+  
+ #Output Matrix
+write.table(mat45_3c, "Matrix_high_3-Component_0.45.txt", sep="\t")
+
+#Make linear plots of all bac and vir 
+bacmat6_3c <- bac[,rownames(mat6_3c)]
+virmat6_3c <- vir[,colnames(mat6_3c)]
+bacvirmat6_3c <- cbind(bacmat6_3c,virmat6_3c)
+bac45_3c <- bac[,rownames(mat45_3c)]
+vir45_3c <- vir[,colnames(mat45_3c)]
+bacvirmat45_3c <- cbind(bac45_3c,vir45_3c)
+
+#ggpairs
+library(GGally)
+#ggpairs(bacvir)
+#ggpairs(bacvir45,columns=3:13)
+#ggpairs(as.data.frame(bacvir45))
+sl(pairs45,ggpairs(as.data.frame(bacvirmat45_3c)))
+sl(pairs6,ggpairs(as.data.frame(bacvirmat6_3c)))
+
+# pairs45 +
+#   theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) 
+
+#pairs6 +
+#   theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) 
+```
+
+#### Network plots
+
+##### Shrinkage
+
+```{r, eval = T, include = T, echo = T, message = F, warning =  F, fig.width=10, fig.height=6, fig.fullwidth = TRUE}
+# Reformat for gephi
+
+## Save blocks as polygon to determine shape in network
+
+result$names$Polygon <- result$names$data
+result$names$Polygon <- replace(result$names$data, c("bac","vir"),c(3,4)) %>% as.integer()
+
+## Remove ubique markers to allow shared coloring in Gephi
+result$names_simple$colnames$X <- gsub("*.\\_", "", result$names$colnames$X)
+result$names_simple$colnames$Y <- gsub("*.\\_", "", result$names$colnames$Y)
+
+#Show network
+
+network(result, comp = 1:3, interactive = FALSE,
+        lwd.edge = 2,
+        cex.node.name = 14,
+        cutoff = 0.3,
+        color.node = col_fil[1:2]) 
+
+network(result, comp = 1:3, interactive = FALSE,
+        lwd.edge = 2,
+        cutoff = 0.4,
+        color.node = col_fil[1:2]) 
+
+network(result, comp = 1:3, interactive = FALSE,
+        lwd.edge = 2,
+        cutoff = 0.5,
+        color.node = col_fil[1:2]) 
+
+#Export network result
+network.res <- network(result, comp = 1:3, interactive = FALSE,
+        lwd.edge = 2,
+        cutoff = 0.30,
+        color.node = col_fil[1:2])
+
+library(igraph)
+
+#network.res 
+
+write.graph(network.res$gR, file = "network.shrinkage0.3.gml", format = "gml")
+```
+
+##### CV
+
+```{r, eval = T, include = T, echo = T, message = F, warning =  F, fig.width=10, fig.height=6, fig.fullwidth = TRUE}
+result.CV$names_simple$colnames$X <- gsub("*.\\_", "", result.CV$names$colnames$X)
+result.CV$names_simple$colnames$Y <- gsub("*.\\_", "", result.CV$names$colnames$Y)
+
+#Show network
+network(result.CV, comp = 1:3, interactive = FALSE,
+        lwd.edge = 2,
+        cutoff = 0.3,
+        color.node = col_fil[1:2]) 
+
+network(result.CV, comp = 1:3, interactive = FALSE,
+        lwd.edge = 2,
+        cutoff = 0.35,
+        color.node = col_fil[1:2]) 
+
+# network(result.CV, comp = 1:3, interactive = FALSE,
+#         lwd.edge = 2,
+#         cutoff = 0.5,
+#         color.node = col_fil[1:2]) 
+
+
+library(igraph)
+network.res <- network(result, comp = 1:3, interactive = FALSE,
+        lwd.edge = 2,
+        cutoff = 0.30,
+        color.node = col_fil[1:2])
+
+write.graph(network.res$gR, file = "network.CV0.3.gml", format = "gml")
+```
+
+## PROCrustes comparison matrix correlation quantifications
+
+### Subset matrices
+
+```{r}
+bac0 <- bac[which(PSB.CSS.both@sam_data$Time == "T0"),] %>% t()
+vir0 <- vir[which(PSV.CSS.host.both@sam_data$Time == "T0"),] %>% t()
+
+bac15 <- bac[which(PSB.CSS.both@sam_data$Time == "T1"),] %>% t()
+vir15 <- vir[which(PSV.CSS.host.both@sam_data$Time == "T1"),] %>% t()
+
+bac30 <- bac[which(PSB.CSS.both@sam_data$Time == "T2"),] %>% t()
+vir30 <- vir[which(PSV.CSS.host.both@sam_data$Time == "T2"),] %>% t()
+
+bac90 <- bac[which(PSB.CSS.both@sam_data$Time == "T3"),] %>% t()
+vir90 <- vir[which(PSV.CSS.host.both@sam_data$Time == "T3"),] %>% t()
+
+data <- list(bac0,bac15,bac30,bac90,vir0,vir15,vir30,vir90)
+```
+
+### PCoAs
+
+```{r}
+get_pcoa <- function(ps="PSB.CSS"){
+
+otu <- data.frame(ps@otu_table) %>% t()
+bray <- vegan::vegdist(otu, method = "bray")
+add <-  !(ade4::is.euclid(bray))
+pcoa <- cmdscale(bray, k = nrow(otu)-1, eig = TRUE, add = add)
+#
+return(pcoa)
+}
+
+pcoa.bac <- get_pcoa(PSB.CSS.both)
+vegan::ordiplot(pcoa.bac, type = "text", main = "PCoA for Bacteria Data, Bray Distances")
+pcoa.vir <- get_pcoa(PSV.CSS.host.both)
+vegan::ordiplot(pcoa.vir, type = "text", main = "PCoA for Viral Data, Bray Distances")
+```
+
+### Procrustes
+
+#### All samples
+
+```{r, warning = F}
+#All time points
+pcoa.bac <- PSB.CSS.both %>% get_pcoa()
+pcoa.vir <- PSV.CSS.host.both %>% get_pcoa()
+
+sl(procrustes.test.all,vegan::protest(X = pcoa.bac, Y = pcoa.vir, scores = "sites", symmetric = T, permutations = 999999), overwrite = F)
+
+procrustes.test.all
+```
+
+#### Per time point
+
+```{r}
+#Individual time points
+pcoa.bac0 <- PSB.CSS.both %>% subset_samples(Days == 1) %>% otu_table() %>% as.matrix() %>% as.data.frame() %>% filter(rowSums(.) != 0) %>% t() %>% vegan::vegdist(method="bray") %>% vegan::wcmdscale(eig = TRUE)
+pcoa.bac15 <- PSB.CSS.both %>% subset_samples(Days == 15) %>% otu_table() %>% as.matrix() %>% as.data.frame() %>% filter(rowSums(.) != 0) %>% t() %>% vegan::vegdist(method="bray") %>% vegan::wcmdscale(eig = TRUE)
+pcoa.bac30 <- PSB.CSS.both %>% subset_samples(Days == 30) %>% otu_table() %>% as.matrix() %>% as.data.frame() %>% filter(rowSums(.) != 0) %>% t() %>% vegan::vegdist(method="bray") %>% vegan::wcmdscale(eig = TRUE)
+pcoa.bac90 <- PSB.CSS.both %>% subset_samples(Days == 90) %>% otu_table() %>% as.matrix() %>% as.data.frame() %>% filter(rowSums(.) != 0) %>% t() %>% vegan::vegdist(method="bray") %>% vegan::wcmdscale(eig = TRUE)
+
+pcoa.vir0 <- PSV.CSS.host.both %>% subset_samples(Days == 1) %>% otu_table() %>% as.matrix() %>% as.data.frame() %>% filter(rowSums(.) != 0) %>% t() %>% vegan::vegdist(method="bray") %>% vegan::wcmdscale(eig = TRUE)
+pcoa.vir15 <- PSV.CSS.host.both %>% subset_samples(Days == 15) %>% otu_table() %>% as.matrix() %>% as.data.frame() %>% filter(rowSums(.) != 0) %>% t() %>% vegan::vegdist(method="bray") %>% vegan::wcmdscale(eig = TRUE)
+pcoa.vir30 <- PSV.CSS.host.both %>% subset_samples(Days == 30) %>% otu_table() %>% as.matrix() %>% as.data.frame() %>% filter(rowSums(.) != 0) %>% t() %>% vegan::vegdist(method="bray") %>% vegan::wcmdscale(eig = TRUE)
+pcoa.vir90 <- PSV.CSS.host.both %>% subset_samples(Days == 90) %>% otu_table() %>% as.matrix() %>% as.data.frame() %>% filter(rowSums(.) != 0) %>% t() %>% vegan::vegdist(method="bray") %>% vegan::wcmdscale(eig = TRUE)
+
+sl(procrustes.test0,vegan::protest(X = pcoa.bac0, Y = pcoa.vir0, scores = "sites", symmetric = T, permutations = 999999), overwrite = F)
+sl(procrustes.test15,vegan::protest(X = pcoa.bac15, Y = pcoa.vir15, scores = "sites", symmetric = T, permutations = 999999), overwrite = F)
+sl(procrustes.test30,vegan::protest(X = pcoa.bac30, Y = pcoa.vir30, scores = "sites", symmetric = T, permutations = 999999), overwrite = F)
+sl(procrustes.test90,vegan::protest(X = pcoa.bac90, Y = pcoa.vir90, scores = "sites", symmetric = T, permutations = 999999), overwrite = F)
+
+
+procrustes.test0
+procrustes.test15
+procrustes.test30
+procrustes.test90
+
+#Combine  procrustes ressults in dataframe
+test0 <- c(procrustes.test0$ss,procrustes.test0$scale,procrustes.test0$signif)
+test15 <- c(procrustes.test15$ss,procrustes.test15$scale,procrustes.test15$signif)
+test30 <- c(procrustes.test30$ss,procrustes.test30$scale,procrustes.test30$signif)
+test90 <- c(procrustes.test90$ss,procrustes.test90$scale,procrustes.test90$signif)
+
+m <- matrix(nrow = 0, ncol =3)
+colnames(m) <- c("Sum of Squares", "Procrustes Correlation", "Pr.F")
+
+m <- rbind(m,test0,test15,test30,test90)
+m
+
+rownames(m) <- c("Day 0", "Day 15", "Day 30", "Day 90")
+
+#Prepare for plotting
+
+dat <- m %>%
+  as.data.frame() %>%
+  tibble::add_column(Variable = rownames(m),.name_repair = "minimal") 
+
+#Add adjusted p-values
+dat$Pr.F.adj <- p.adjust(dat$Pr.F, method = 'holm')
+
+#Show table
+#knitr::kable(anova.dat)
+
+##Fancy plot
+
+melt <- tidyr::pivot_longer(dat,cols=c("Procrustes Correlation"), names_to='measure', values_to="value") %>%
+  add_significance(p.col = "Pr.F", output.col = "PrF.sym",
+                   cutpoints = c(0, 1e-04, 0.001, 0.01, 0.05, 0.1,1),
+                   symbols = c("****", "***", "**", "*", "\u02D9", "")
+                   ) #%>%
+  #arrange(value)
+
+procrustes.bar <- ggbarplot(melt,
+                                         x="Variable",
+                                         y="value",
+                                         #color = "Variable",
+                                         orientation = c("horizontal"),
+                                         color = NA,
+                                         fill = "measure",
+                                         position=position_dodge(0.7),
+                                         label = melt$PrF.sym,
+                                         lab.size = 9,
+                                         lab.vjust = 0.7,
+                                         lab.hjust = -0.3
+                                         
+) +
+  #stat_pvalue_manual(
+  #  adonis.melt,  label = "PrF.sym", tip.length = 0.01
+  #) +
+  #geom_hline(yintercept = 0.05) +
+  ggtitle("") +
+  xlab("") +
+  ylab("Procrustes test significance") +
+  scale_fill_jco() +
+  scale_x_discrete(limits = rev)
+
+procrustes.bar
+```
+
+# Figures
+
+## Figure 1
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=6, fig.fullwidth = TRUE}
+
+plot_grid(amp_vir_genus,
+          plot_grid(bar_bac,bar_host,
+          nrow = 1,
+          labels = c("B","C"),
+          label_size = 30, hjust = 0.3,vjust = 1,
+          rel_heights = c(1,1),
+          rel_widths = c(1.15,1)
+          ),
+          nrow = 2,
+          labels = c("A",""),
+          label_size = 30, hjust = 0.3,vjust = 1,
+          rel_heights = c(1,1.5)
+) +
+  theme(plot.margin = unit(c(0,0,0,0.5), "cm")) 
+
+ggsave("Figures/Figure 1.png",width = 25, height = 16, units = "cm", dpi = 400) 
+
+ggsave("Figures/Figure 1.tiff",width = 25, height = 16, units = "cm", dpi = 400) 
+
+ggsave("Figures/Figure 1.pdf",width = 25, height = 16, units = "cm", dpi = 400) 
+```
+
+## Figure S1
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=15, fig.fullwidth = TRUE}
+
+plot_grid(plot_grid(bar_bac_fam,bar_vir_family,
+                    nrow = 1,
+                    labels = c("A","B"),
+                    label_size = 30, hjust = 0.3,vjust = 1,
+                    rel_heights = c(1,1),
+                    rel_widths = c(1.15,1)
+                    ),
+          plot_grid(amp_bac_genus,plot_grid(upset.bac.time$Main_bar,upset.bac.time$Matrix,nrow=2,rel_heights = c(3,1), scale = 0.85),
+                    nrow = 1,labels = c("C","D"),
+                    label_size = 30, hjust = 0.3,vjust = 1,
+                    rel_heights = c(1,1),
+                    rel_widths = c(3,1)
+                    ),
+          plot_grid(amp_vir_species, plot_grid(upset.vir.time$Main_bar,upset.vir.time$Matrix,nrow=2,rel_heights = c(3,1), scale = 0.85),
+                    nrow = 1,labels = c("E","F"),
+                    label_size = 30, hjust = 0.3,vjust = 1,
+                    rel_heights = c(1,1),
+                    rel_widths = c(3,1)
+                    ),
+          nrow = 4,
+          labels = c("","",""),
+          label_size = 30, hjust = 0.3,vjust = 1,
+          rel_heights = c(0.7,0.8,1)
+) +
+  theme(plot.margin = unit(c(0,0,0,0.5), "cm")) 
+
+ggsave("Figures/Figure S1.png",width = 25, height = 40, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure S1.tiff",width = 25, height = 40, units = "cm", dpi = 300)
+
+ggsave("Figures/Figure S1.pdf",width = 25, height = 40, units = "cm", dpi = 300) 
+```
+
+## Figure 2
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=12, fig.fullwidth = TRUE}
+
+plot_grid(plot_grid(bac.alpha,vir.alpha,
+          nrow = 1,
+          labels = c("A","B"),
+          label_size = 30, hjust = 0.3,vjust = 1,
+          rel_heights = c(1,1),
+          rel_widths = c(1,1)
+          ),
+          plot_grid(bac.beta,vir.beta,
+          nrow = 1,
+          labels = c("C","D"),
+          label_size = 30, hjust = 0.3,vjust = 1,
+          rel_heights = c(1,1),
+          rel_widths = c(1,1)
+          ),
+          plot_grid(BrayPlot.bac.0, BrayPlot.bac.15, BrayPlot.bac.30, BrayPlot.bac.90,
+          nrow = 1,
+          #labels = c("",""),
+          label_size = 30, hjust = 0.3,vjust = 1,
+          rel_heights = c(1,1),
+          rel_widths = c(1.15,1)
+          ),
+          plot_grid(BrayPlot.vir.0, BrayPlot.vir.15, BrayPlot.vir.30, BrayPlot.vir.90,
+          nrow = 1,
+          #labels = c("C","D"),
+          label_size = 30, hjust = 0.3,vjust = 1,
+          rel_heights = c(1,1),
+          rel_widths = c(1.15,1)
+          ),
+          nrow = 4,
+          labels = c("","","E","F"),
+          label_size = 30, hjust = 0.3,vjust = 1,
+          rel_heights = c(1,1,0.8,0.8)
+          ) +
+  theme(plot.margin = unit(c(0,0,0,0.5), "cm"))
+          
+
+ggsave("Figures/Figure 2.png",width = 25, height = 30, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure 2.tiff",width = 25, height = 30, units = "cm", dpi = 300)
+
+ggsave("Figures/Figure 2.pdf",width = 25, height = 30, units = "cm", dpi = 300) 
+```
+
+## Figure S2
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=7, fig.fullwidth = TRUE}
+
+ggarrange(rabu.bac,rabu.vir, common.legend = TRUE, legend = "bottom",labels=c("A","B"),font.label = list(size = 30), label.x = 0, label.y = 1)
+
+ggsave("Figures/Figure S2.png",width = 25, height = 15, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure S2.tiff",width = 25, height = 15, units = "cm", dpi = 300)
+
+ggsave("Figures/Figure S2.pdf",width = 25, height = 15, units = "cm", dpi = 300) 
+```
+
+## Figure S3
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=7, fig.fullwidth = TRUE}
+
+ggarrange(alpha.metrics.bac,alpha.metrics.vir, common.legend = TRUE, legend = "bottom",labels=c("A","B"),font.label = list(size = 30), label.x = 0, label.y = 1)
+
+
+ggsave("Figures/Figure S3.png",width = 25, height = 10, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure S3.tiff",width = 25, height = 10, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure S3.pdf",width = 25, height = 10, units = "cm", dpi = 300)
+```
+
+## Figure 3
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=6, fig.fullwidth = TRUE}
+fancy.anova.bar.comb.host
+#ggarrange(fancy.anova.bar.comb.host,labels=c("A",font.label = list(size = 30), label.x = 0, label.y = 1,widths = c(1,0.75))
+
+ggsave("Figures/Figure 3.png",width = 25, height = 18, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure 3.tiff",width = 25, height = 18, units = "cm", dpi = 300)
+
+ggsave("Figures/Figure 3.pdf",width = 25, height = 18, units = "cm", dpi = 300)
+```
+
+## Figure S4
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10 fig.height=6, fig.fullwidth = TRUE}
+ggarrange(ggarrange(rabu.bac.bpd,rabu.vir.bpd, common.legend = TRUE, legend = "bottom",labels=c("A","B"),font.label = list(size = 30), label.x = 0, label.y = 1.07),
+          ggarrange(rabu.bac.sga,rabu.vir.sga, common.legend = TRUE, legend = "bottom",labels=c("C","D"),font.label = list(size = 30), label.x = 0, label.y = 1.07),
+          nrow = 2
+          ) +
+  theme(plot.margin = unit(c(0.2,0,0,0.5), "cm"))
+
+ggsave("Figures/Figure S4.png",width = 25, height = 17, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure S4.tiff",width = 25, height = 17, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure S4.pdf",width = 25, height = 17, units = "cm", dpi = 300)
+```
+
+
+## Figure S4 - CD?
+
+```{r, eval = T, include = T, echo = F, message = F, warning =  F, fig.width=10, fig.height=4, fig.fullwidth = TRUE}
+ggarrange(rabu.bac.sga,rabu.vir.sga, legend = "bottom",labels=c("C","D"),font.label = list(size = 30), label.x = 0, label.y = 1,widths = c(1,1))
+
+ggsave("Figures/Figure S4b.png",width = 25, height = 8, units = "cm", dpi = 300) 
+
+ggsave("Figures/Figure S4b.tiff",width = 25, height = 8, units = "cm", dpi = 300)
+
+ggsave("Figures/Figure S4b.pdf",width = 25, height = 8, units = "cm", dpi = 300)
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
